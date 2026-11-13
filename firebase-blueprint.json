@@ -1,0 +1,603 @@
+{
+  "entities": {
+    "PlatformBootstrap": {
+      "title": "PlatformBootstrap",
+      "description": "Verrou d'initialisation unique de l'administrateur fondateur de la plateforme.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "description": "UID Firebase de l'administrateur fondateur." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Horodatage serveur." }
+      },
+      "required": ["ownerUid", "createdAt"]
+    },
+    "PlatformSettings": {
+      "title": "PlatformSettings",
+      "description": "Paramètres généraux nationaux de la plateforme ÉCOLE CONNECTÉE.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "platformName": { "type": "string" },
+        "academicYear": { "type": "string" },
+        "gradingScale": { "type": "number" },
+        "smsGatewayEnabled": { "type": "boolean" },
+        "whatsappGatewayEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "platformName", "academicYear", "gradingScale", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Profil utilisateur et rôle d'accès (sans PII sensible).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin_national", "admin_regional", "directeur", "enseignant", "parent", "eleve"] },
+        "invitationId": { "type": "string" },
+        "regionId": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string", "description": "Identifiant multi-locataire (schoolId pour l'établissement, regionId ou 'national')." },
+        "schoolName": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "classIds": { "type": "array" },
+        "studentIds": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "consentAccepted": { "type": "boolean" },
+        "preferredChannel": { "type": "string", "enum": ["app", "sms", "whatsapp"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "fullName", "role", "isActive", "consentAccepted", "createdAt"]
+    },
+    "UserPrivateContact": {
+      "title": "UserPrivateContact",
+      "description": "Données personnelles isolées (email, téléphone, WhatsApp, adresse).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsappNumber": { "type": "string" },
+        "address": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "email", "createdAt"]
+    },
+    "RoleInvitation": {
+      "title": "RoleInvitation",
+      "description": "Pré-enregistrement nominatif d'un compte (directeur, admin régional, enseignant, parent, élève).",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "fullName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin_national", "admin_regional", "directeur", "enseignant", "parent", "eleve"] },
+        "regionId": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "schoolName": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "classIds": { "type": "array" },
+        "studentIds": { "type": "array" },
+        "phone": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "claimed", "revoked"] },
+        "claimedByUid": { "type": "string" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "fullName", "role", "status", "createdByUid", "createdAt"]
+    },
+    "AccessRequest": {
+      "title": "AccessRequest",
+      "description": "Demande d'habilitation soumise par un utilisateur authentifié sans invitation.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "requestedRole": { "type": "string", "enum": ["admin_regional", "directeur", "enseignant", "parent", "eleve"] },
+        "schoolHint": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewerUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "fullName", "email", "requestedRole", "status", "createdAt"]
+    },
+    "Region": {
+      "title": "Region",
+      "description": "Région administrative nationale.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "regionalAdminName": { "type": "string" },
+        "createdByUid": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "code", "nationalAdminUid", "createdByUid", "createdAt"]
+    },
+    "School": {
+      "title": "School",
+      "description": "Établissement scolaire (école primaire, collège).",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "schoolType": { "type": "string", "enum": ["primaire", "college", "lycee"] },
+        "regionId": { "type": "string" },
+        "tenantId": { "type": "string", "description": "Identifiant de cloisonnement multi-locataire de l'établissement." },
+        "regionName": { "type": "string" },
+        "address": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "directorName": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "code", "schoolType", "regionId", "nationalAdminUid", "isActive", "createdByUid", "createdAt"]
+    },
+    "SchoolClass": {
+      "title": "SchoolClass",
+      "description": "Classe d'un établissement scolaire.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "schoolName": { "type": "string" },
+        "regionId": { "type": "string" },
+        "name": { "type": "string" },
+        "level": { "type": "string" },
+        "academicYear": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "teacherUid": { "type": "string" },
+        "teacherUids": { "type": "array" },
+        "parentUids": { "type": "array" },
+        "studentUids": { "type": "array" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "name", "level", "academicYear", "directorUid", "createdByUid", "createdAt"]
+    },
+    "Subject": {
+      "title": "Subject",
+      "description": "Matière scolaire enseignée dans une classe.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "regionId": { "type": "string" },
+        "classId": { "type": "string" },
+        "className": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "coefficient": { "type": "number" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "teacherUid": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "name", "coefficient", "directorUid", "createdByUid", "createdAt"]
+    },
+    "ScheduleEntry": {
+      "title": "ScheduleEntry",
+      "description": "Créneau d'emploi du temps hebdomadaire.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "regionId": { "type": "string" },
+        "classId": { "type": "string" },
+        "className": { "type": "string" },
+        "subjectId": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "teacherUid": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "dayOfWeek": { "type": "string", "enum": ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"] },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "room": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "subjectId", "dayOfWeek", "startTime", "endTime", "directorUid", "createdByUid", "createdAt"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Élève inscrit dans un établissement et rattaché à une classe.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "schoolName": { "type": "string" },
+        "regionId": { "type": "string" },
+        "classId": { "type": "string" },
+        "className": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "matricule": { "type": "string" },
+        "dateOfBirth": { "type": "string" },
+        "gender": { "type": "string", "enum": ["M", "F"] },
+        "parentUids": { "type": "array" },
+        "studentUid": { "type": "string" },
+        "gradesVisibleToStudent": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "teacherUids": { "type": "array" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "firstName", "lastName", "matricule", "directorUid", "isActive", "createdByUid", "createdAt"]
+    },
+    "LessonEntry": {
+      "title": "LessonEntry",
+      "description": "Entrée du cahier de texte numérique (leçon quotidienne, exercices et devoirs).",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "schoolName": { "type": "string" },
+        "regionId": { "type": "string" },
+        "classId": { "type": "string" },
+        "className": { "type": "string" },
+        "subjectId": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "teacherUid": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "lessonDate": { "type": "string" },
+        "chapter": { "type": "string" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "skillsWorked": { "type": "string" },
+        "classExercises": { "type": "string" },
+        "homework": { "type": "string" },
+        "homeworkDueDate": { "type": "string" },
+        "attachmentLabel": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "parentUids": { "type": "array" },
+        "authorizedUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "subjectId", "teacherUid", "lessonDate", "chapter", "title", "summary", "createdAt"]
+    },
+    "AssessmentGrade": {
+      "title": "AssessmentGrade",
+      "description": "Note d'évaluation d'un élève.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "regionId": { "type": "string" },
+        "classId": { "type": "string" },
+        "className": { "type": "string" },
+        "subjectId": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentUid": { "type": "string" },
+        "gradesVisibleToStudent": { "type": "boolean" },
+        "parentUids": { "type": "array" },
+        "teacherUid": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "title": { "type": "string" },
+        "assessmentType": { "type": "string", "enum": ["devoir", "interrogation", "composition", "oral"] },
+        "score": { "type": "number" },
+        "maxScore": { "type": "number" },
+        "coefficient": { "type": "number" },
+        "period": { "type": "string", "enum": ["Trimestre 1", "Trimestre 2", "Trimestre 3"] },
+        "date": { "type": "string" },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "subjectId", "studentId", "teacherUid", "title", "assessmentType", "score", "maxScore", "coefficient", "period", "date", "createdAt"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Enregistrement de présence, absence ou retard d'un élève.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "regionId": { "type": "string" },
+        "classId": { "type": "string" },
+        "className": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentUid": { "type": "string" },
+        "parentUids": { "type": "array" },
+        "teacherUid": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["present", "absent", "retard"] },
+        "minutesLate": { "type": "integer" },
+        "justified": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "studentId", "teacherUid", "date", "status", "justified", "createdAt"]
+    },
+    "DifficultyAlert": {
+      "title": "DifficultyAlert",
+      "description": "Signalement de difficulté scolaire ou observation pédagogique individuelle.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "regionId": { "type": "string" },
+        "classId": { "type": "string" },
+        "className": { "type": "string" },
+        "subjectId": { "type": "string" },
+        "subjectName": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentUid": { "type": "string" },
+        "parentUids": { "type": "array" },
+        "teacherUid": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "category": { "type": "string", "enum": ["comprehension", "attention", "comportement", "assiduite", "methode", "autre"] },
+        "severity": { "type": "string", "enum": ["info", "attention", "urgent"] },
+        "observation": { "type": "string" },
+        "recommendation": { "type": "string" },
+        "resolved": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "studentId", "teacherUid", "category", "severity", "observation", "resolved", "createdAt"]
+    },
+    "ReportCard": {
+      "title": "ReportCard",
+      "description": "Bulletin scolaire périodique d'un élève.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "schoolName": { "type": "string" },
+        "regionId": { "type": "string" },
+        "classId": { "type": "string" },
+        "className": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "studentUid": { "type": "string" },
+        "parentUids": { "type": "array" },
+        "directorUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "period": { "type": "string", "enum": ["Trimestre 1", "Trimestre 2", "Trimestre 3"] },
+        "overallAverage": { "type": "number" },
+        "classAverage": { "type": "number" },
+        "rankLabel": { "type": "string" },
+        "absencesCount": { "type": "integer" },
+        "tardiesCount": { "type": "integer" },
+        "councilDecision": { "type": "string" },
+        "directorObservation": { "type": "string" },
+        "generatedByUid": { "type": "string" },
+        "published": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "classId", "studentId", "directorUid", "period", "overallAverage", "published", "generatedByUid", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Message sécurisé entre parent, enseignant ou direction.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "participantUids": { "type": "array" },
+        "senderUid": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderRole": { "type": "string" },
+        "recipientUid": { "type": "string" },
+        "recipientName": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "subject": { "type": "string" },
+        "body": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "participantUids", "senderUid", "recipientUid", "subject", "body", "read", "createdAt"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Annonce officielle nationale, régionale ou d'établissement.",
+      "type": "object",
+      "properties": {
+        "scope": { "type": "string", "enum": ["national", "regional", "school"] },
+        "regionId": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorRole": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "priority": { "type": "string", "enum": ["normale", "importante", "urgente"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["scope", "authorUid", "title", "content", "priority", "createdAt"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "Alerte ou notification temps réel destinée à un utilisateur.",
+      "type": "object",
+      "properties": {
+        "recipientUid": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "type": { "type": "string", "enum": ["absence", "retard", "note", "devoir", "lecon", "difficulte", "bulletin", "message", "annonce"] },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "studentId": { "type": "string" },
+        "relatedId": { "type": "string" },
+        "read": { "type": "boolean" },
+        "channelPreference": { "type": "string", "enum": ["app", "sms", "whatsapp"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["recipientUid", "senderUid", "type", "title", "body", "read", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Journal d'audit immuable des opérations sensibles.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actorRole": { "type": "string" },
+        "action": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetId": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "details": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "actorRole", "action", "targetType", "targetId", "details", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/platform_config/{configId}": {
+      "schema": { "$ref": "#/entities/PlatformSettings" },
+      "description": "Configuration nationale et verrou bootstrap."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Profils utilisateurs et rôles RBAC."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateContact" },
+      "description": "Coordonnées personnelles isolées (email, téléphone, WhatsApp)."
+    },
+    "/role_invitations/{invitationId}": {
+      "schema": { "$ref": "#/entities/RoleInvitation" },
+      "description": "Invitations et pré-enregistrements de comptes."
+    },
+    "/access_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/AccessRequest" },
+      "description": "Demandes d'accès en attente de validation."
+    },
+    "/regions/{regionId}": {
+      "schema": { "$ref": "#/entities/Region" },
+      "description": "Régions nationales gérées par l'administration."
+    },
+    "/schools/{schoolId}": {
+      "schema": { "$ref": "#/entities/School" },
+      "description": "Établissements scolaires primaires et collèges."
+    },
+    "/classes/{classId}": {
+      "schema": { "$ref": "#/entities/SchoolClass" },
+      "description": "Classes par établissement."
+    },
+    "/subjects/{subjectId}": {
+      "schema": { "$ref": "#/entities/Subject" },
+      "description": "Matières et affectations enseignants."
+    },
+    "/schedules/{scheduleId}": {
+      "schema": { "$ref": "#/entities/ScheduleEntry" },
+      "description": "Emplois du temps des classes."
+    },
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Élèves inscrits et liaisons parents."
+    },
+    "/lessons/{lessonId}": {
+      "schema": { "$ref": "#/entities/LessonEntry" },
+      "description": "Cahier de texte numérique quotidien."
+    },
+    "/assessments/{assessmentId}": {
+      "schema": { "$ref": "#/entities/AssessmentGrade" },
+      "description": "Notes et évaluations scolaires."
+    },
+    "/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Présences, absences et retards."
+    },
+    "/difficulties/{difficultyId}": {
+      "schema": { "$ref": "#/entities/DifficultyAlert" },
+      "description": "Signalements de difficultés et observations individuelles."
+    },
+    "/report_cards/{reportCardId}": {
+      "schema": { "$ref": "#/entities/ReportCard" },
+      "description": "Bulletins scolaires trimestriels."
+    },
+    "/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Messagerie parents-enseignants et direction."
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "Annonces générales."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "Notifications et alertes utilisateurs."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Journal d'audit immuable des opérations sensibles."
+    }
+  }
+}

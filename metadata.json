@@ -1,0 +1,6 @@
+{
+  "name": "École Connectée",
+  "description": "Plateforme numérique nationale de suivi scolaire pour les établissements, enseignants, parents et élèves de Djibouti.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
