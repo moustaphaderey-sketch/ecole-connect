@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.EventBusy
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.School
@@ -87,6 +88,7 @@ import com.example.ui.components.AuthScreen
 import com.example.ui.components.OnboardingAndConsentGate
 import com.example.ui.components.RoleBadge
 import com.example.ui.components.signOut
+import com.example.ui.screens.AboutUsScreen
 import com.example.ui.screens.AdministrationScreen
 import com.example.ui.screens.AttendanceAndAlertsScreen
 import com.example.ui.screens.CahierTexteScreen
@@ -236,6 +238,7 @@ private fun sectionIcon(section: AppSection): ImageVector = when (section) {
     AppSection.ADMINISTRATION -> Icons.Filled.School
     AppSection.MESSAGERIE -> Icons.AutoMirrored.Filled.Chat
     AppSection.NOTIFICATIONS -> Icons.Filled.Notifications
+    AppSection.A_PROPOS -> Icons.Filled.Info
 }
 
 private fun sectionShortLabel(section: AppSection): String = when (section) {
@@ -246,6 +249,7 @@ private fun sectionShortLabel(section: AppSection): String = when (section) {
     AppSection.ADMINISTRATION -> "Gestion"
     AppSection.MESSAGERIE -> "Messages"
     AppSection.NOTIFICATIONS -> "Alertes"
+    AppSection.A_PROPOS -> "À propos"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -260,6 +264,7 @@ private fun EcoleConnecteeMainShell(
     onSignOut: () -> Unit
 ) {
     val selectedSection by viewModel.selectedSection.collectAsStateWithLifecycle()
+    val targetAdminTabName by viewModel.targetAdminTabName.collectAsStateWithLifecycle()
     val selectedChildId by viewModel.selectedChildId.collectAsStateWithLifecycle()
     val settings by viewModel.platformSettings.collectAsStateWithLifecycle()
     val regions by viewModel.regions.collectAsStateWithLifecycle()
@@ -280,8 +285,14 @@ private fun EcoleConnecteeMainShell(
     val announcements by viewModel.announcements.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
+    val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
 
+    val role = profile.roleEnum()
     val unreadNotificationsCount = remember(notifications) { notifications.count { !it.read } }
+    val pendingRequestsCount = remember(role, accessRequests) {
+        if (role == UserRole.ADMIN_NATIONAL) accessRequests.count { it.status == "pending" } else 0
+    }
+    val totalAlertBadgeCount = unreadNotificationsCount + pendingRequestsCount
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -298,7 +309,6 @@ private fun EcoleConnecteeMainShell(
         viewModel.selectSection(AppSection.TABLEAU_DE_BORD)
     }
 
-    val role = profile.roleEnum()
     val adminLabel = when (role) {
         UserRole.ADMIN_NATIONAL, UserRole.ADMIN_REGIONAL, UserRole.DIRECTEUR -> "Établissements & Classes"
         else -> "Emploi du temps"
@@ -372,9 +382,15 @@ private fun EcoleConnecteeMainShell(
                             scope.launch { drawerState.close() }
                         },
                         icon = { Icon(sectionIcon(section), contentDescription = null) },
-                        badge = if (section == AppSection.NOTIFICATIONS && unreadNotificationsCount > 0) {
-                            { Badge { Text("$unreadNotificationsCount") } }
-                        } else null,
+                        badge = when {
+                            section == AppSection.NOTIFICATIONS && totalAlertBadgeCount > 0 -> {
+                                { Badge { Text("$totalAlertBadgeCount") } }
+                            }
+                            section == AppSection.ADMINISTRATION && pendingRequestsCount > 0 -> {
+                                { Badge { Text("$pendingRequestsCount") } }
+                            }
+                            else -> null
+                        },
                         modifier = Modifier
                             .padding(horizontal = 12.dp, vertical = 2.dp)
                             .testTag("drawer_item_${section.name.lowercase()}")
@@ -436,8 +452,8 @@ private fun EcoleConnecteeMainShell(
                             ) {
                                 BadgedBox(
                                     badge = {
-                                        if (unreadNotificationsCount > 0) {
-                                            Badge { Text("$unreadNotificationsCount") }
+                                        if (totalAlertBadgeCount > 0) {
+                                            Badge { Text("$totalAlertBadgeCount") }
                                         }
                                     }
                                 ) {
@@ -487,12 +503,20 @@ private fun EcoleConnecteeMainShell(
                                     selected = selectedSection == section,
                                     onClick = { viewModel.selectSection(section) },
                                     icon = {
-                                        if (section == AppSection.NOTIFICATIONS && unreadNotificationsCount > 0) {
-                                            BadgedBox(badge = { Badge { Text("$unreadNotificationsCount") } }) {
+                                        when {
+                                            section == AppSection.NOTIFICATIONS && totalAlertBadgeCount > 0 -> {
+                                                BadgedBox(badge = { Badge { Text("$totalAlertBadgeCount") } }) {
+                                                    Icon(sectionIcon(section), contentDescription = section.labelFr)
+                                                }
+                                            }
+                                            section == AppSection.ADMINISTRATION && pendingRequestsCount > 0 -> {
+                                                BadgedBox(badge = { Badge { Text("$pendingRequestsCount") } }) {
+                                                    Icon(sectionIcon(section), contentDescription = section.labelFr)
+                                                }
+                                            }
+                                            else -> {
                                                 Icon(sectionIcon(section), contentDescription = section.labelFr)
                                             }
-                                        } else {
-                                            Icon(sectionIcon(section), contentDescription = section.labelFr)
                                         }
                                     },
                                     label = { Text(sectionShortLabel(section)) }
@@ -523,9 +547,14 @@ private fun EcoleConnecteeMainShell(
                                 difficulties = difficulties,
                                 announcements = announcements,
                                 notifications = notifications,
+                                pendingAccessRequestsCount = pendingRequestsCount,
+                                isBusy = isBusy,
                                 selectedChildId = selectedChildId,
                                 onSelectChild = viewModel::selectChild,
                                 onNavigate = viewModel::selectSection,
+                                onOpenPendingApprovals = viewModel::openAdminApprovals,
+                                onOpenDirectorSchoolSetup = viewModel::openDirectorSchoolSetup,
+                                onImportOfficialSchools = viewModel::importOfficialDjiboutiSchools,
                                 onUpdateSettings = viewModel::updatePlatformSettings
                             )
 
@@ -538,7 +567,8 @@ private fun EcoleConnecteeMainShell(
                                 lessons = lessons,
                                 selectedChildId = selectedChildId,
                                 onSelectChild = viewModel::selectChild,
-                                onPublishLesson = viewModel::publishLesson
+                                onPublishLesson = viewModel::publishLesson,
+                                onUpdateLesson = viewModel::updateLesson
                             )
 
                             AppSection.NOTES_ET_BULLETINS -> GradesAndBulletinsScreen(
@@ -552,7 +582,9 @@ private fun EcoleConnecteeMainShell(
                                 selectedChildId = selectedChildId,
                                 onSelectChild = viewModel::selectChild,
                                 onRecordAssessment = viewModel::recordAssessment,
-                                onGenerateReportCard = viewModel::generateReportCard
+                                onGenerateReportCard = viewModel::generateReportCard,
+                                onUpdateAssessment = viewModel::updateAssessment,
+                                onUpdateReportCard = viewModel::updateReportCard
                             )
 
                             AppSection.PRESENCES_ET_ALERTES -> AttendanceAndAlertsScreen(
@@ -565,7 +597,9 @@ private fun EcoleConnecteeMainShell(
                                 onSelectChild = viewModel::selectChild,
                                 onRecordAttendance = viewModel::recordAttendance,
                                 onReportDifficulty = viewModel::reportDifficulty,
-                                onResolveDifficulty = viewModel::resolveDifficulty
+                                onResolveDifficulty = viewModel::resolveDifficulty,
+                                onUpdateAttendance = viewModel::updateAttendance,
+                                onUpdateDifficulty = viewModel::updateDifficulty
                             )
 
                             AppSection.ADMINISTRATION -> AdministrationScreen(
@@ -579,8 +613,13 @@ private fun EcoleConnecteeMainShell(
                                 invitations = invitations,
                                 accessRequests = accessRequests,
                                 managedUsers = managedUsers,
+                                isBusy = isBusy,
+                                targetTabName = targetAdminTabName,
+                                onTargetTabConsumed = viewModel::consumeTargetAdminTab,
                                 onCreateRegion = viewModel::createRegion,
                                 onCreateSchool = viewModel::createSchool,
+                                onSetupDirectorSchool = viewModel::setupDirectorSchool,
+                                onImportOfficialSchools = viewModel::importOfficialDjiboutiSchools,
                                 onCreateClass = viewModel::createClass,
                                 onCreateSubject = viewModel::createSubject,
                                 onCreateScheduleEntry = viewModel::createScheduleEntry,
@@ -590,7 +629,15 @@ private fun EcoleConnecteeMainShell(
                                 onSetUserActive = viewModel::setUserActive,
                                 onAssignDirector = viewModel::assignDirector,
                                 onApproveAccessRequest = viewModel::approveAccessRequest,
-                                onRejectAccessRequest = viewModel::rejectAccessRequest
+                                onRejectAccessRequest = viewModel::rejectAccessRequest,
+                                onUpdateRegion = viewModel::updateRegion,
+                                onUpdateSchool = viewModel::updateSchool,
+                                onUpdateClass = viewModel::updateClass,
+                                onUpdateSubject = viewModel::updateSubject,
+                                onUpdateScheduleEntry = viewModel::updateScheduleEntry,
+                                onUpdateStudent = viewModel::updateStudent,
+                                onUpdateInvitation = viewModel::updateRoleInvitation,
+                                onUpdateUser = viewModel::updateManagedUser
                             )
 
                             AppSection.MESSAGERIE -> CommunicationScreen(
@@ -606,7 +653,8 @@ private fun EcoleConnecteeMainShell(
                                 announcements = announcements,
                                 onSendMessage = viewModel::sendMessage,
                                 onMarkMessageRead = viewModel::markMessageRead,
-                                onPublishAnnouncement = viewModel::publishAnnouncement
+                                onPublishAnnouncement = viewModel::publishAnnouncement,
+                                onUpdateAnnouncement = viewModel::updateAnnouncement
                             )
 
                             AppSection.NOTIFICATIONS -> NotificationsAndAuditScreen(
@@ -615,9 +663,17 @@ private fun EcoleConnecteeMainShell(
                                 settings = settings,
                                 notifications = notifications,
                                 auditLogs = auditLogs,
+                                accessRequests = accessRequests,
+                                regions = regions,
+                                schools = schools,
                                 onMarkNotificationRead = viewModel::markNotificationRead,
+                                onApproveAccessRequest = viewModel::approveAccessRequest,
+                                onRejectAccessRequest = viewModel::rejectAccessRequest,
+                                onOpenApprovals = viewModel::openAdminApprovals,
                                 onSavePreferences = viewModel::acceptConsentAndSaveChannel
                             )
+
+                            AppSection.A_PROPOS -> AboutUsScreen()
                         }
                     }
                 }

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -34,9 +35,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.model.AccessRequest
 import com.example.data.model.AuditLog
 import com.example.data.model.NotificationItem
 import com.example.data.model.PlatformSettings
+import com.example.data.model.Region
+import com.example.data.model.School
 import com.example.data.model.UserPrivateContact
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
@@ -53,7 +57,13 @@ fun NotificationsAndAuditScreen(
     settings: PlatformSettings?,
     notifications: List<NotificationItem>,
     auditLogs: List<AuditLog>,
+    accessRequests: List<AccessRequest> = emptyList(),
+    regions: List<Region> = emptyList(),
+    schools: List<School> = emptyList(),
     onMarkNotificationRead: (String) -> Unit,
+    onApproveAccessRequest: (AccessRequest, UserRole, String, School?) -> Unit = { _, _, _, _ -> },
+    onRejectAccessRequest: (AccessRequest) -> Unit = {},
+    onOpenApprovals: () -> Unit = {},
     onSavePreferences: (String, String, String, String) -> Unit
 ) {
     val role = profile.roleEnum()
@@ -64,8 +74,13 @@ fun NotificationsAndAuditScreen(
     }
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
+    var approveRequestTarget by remember { mutableStateOf<AccessRequest?>(null) }
     val safeIndex = selectedTabIndex.coerceIn(0, tabs.lastIndex)
     val activeTab = tabs[safeIndex]
+    val pendingRequests = remember(role, accessRequests) {
+        if (role == UserRole.ADMIN_NATIONAL) accessRequests.filter { it.status == "pending" }
+        else emptyList()
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -92,7 +107,81 @@ fun NotificationsAndAuditScreen(
 
         when (activeTab) {
             "Notifications" -> {
-                if (notifications.isEmpty()) {
+                if (pendingRequests.isNotEmpty()) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Inscriptions en attente (${pendingRequests.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            OutlinedButton(onClick = onOpenApprovals) {
+                                Text("Gérer tout")
+                            }
+                        }
+                    }
+                    items(pendingRequests, key = { "notif_req_${it.userId}" }) { req ->
+                        ElevatedCard(
+                            colors = CardDefaults.elevatedCardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                                        shape = MaterialTheme.shapes.small
+                                    ) {
+                                        Text(
+                                            text = "INSCRIPTION EN ATTENTE • ${UserRole.fromKey(req.requestedRole).labelFr.uppercase()}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                                Text(req.fullName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    text = req.email + if (req.phone.isNotBlank()) " • ${req.phone}" else "",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                if (req.schoolHint.isNotBlank()) {
+                                    Text(
+                                        text = "Établissement / Détails : ${req.schoolHint}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = { approveRequestTarget = req },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Approuver")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onRejectAccessRequest(req) },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Refuser")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (notifications.isEmpty() && pendingRequests.isEmpty()) {
                     item {
                         EmptyStateCard(
                             icon = Icons.Filled.Notifications,
@@ -186,6 +275,20 @@ fun NotificationsAndAuditScreen(
         }
 
         item { Spacer(Modifier.height(24.dp)) }
+    }
+
+    if (approveRequestTarget != null) {
+        val targetReq = approveRequestTarget!!
+        ApproveAccessRequestDialog(
+            request = targetReq,
+            regions = regions,
+            schools = schools,
+            onDismiss = { approveRequestTarget = null },
+            onSubmit = { assignedRole, regionId, school ->
+                onApproveAccessRequest(targetReq, assignedRole, regionId, school)
+                approveRequestTarget = null
+            }
+        )
     }
 }
 

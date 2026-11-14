@@ -16,12 +16,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -91,13 +93,20 @@ fun CommunicationScreen(
         content: String,
         priority: String,
         authorizedUids: List<String>
-    ) -> Unit
+    ) -> Unit,
+    onUpdateAnnouncement: (
+        announcement: Announcement,
+        title: String,
+        content: String,
+        priority: String
+    ) -> Unit = { _, _, _, _ -> }
 ) {
     val role = profile.roleEnum()
     val canPublishAnnouncement = role == UserRole.ADMIN_NATIONAL || role == UserRole.ADMIN_REGIONAL || role == UserRole.DIRECTEUR
     var selectedTab by remember { mutableIntStateOf(0) }
     var showMessageDialog by remember { mutableStateOf(false) }
     var showAnnouncementDialog by remember { mutableStateOf(false) }
+    var editingAnnouncement by remember { mutableStateOf<Announcement?>(null) }
 
     val recipientChoices = remember(profile.userId, managedUsers, schools, subjects, lessons, messages) {
         val map = linkedMapOf<String, RecipientChoice>()
@@ -259,6 +268,7 @@ fun CommunicationScreen(
                     }
                 } else {
                     items(announcements, key = { it.id }) { ann ->
+                        val canEditAnnouncement = role == UserRole.ADMIN_NATIONAL || ann.authorUid == profile.userId
                         ElevatedCard {
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -270,15 +280,29 @@ fun CommunicationScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(ann.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                    Surface(
-                                        color = if (ann.priority == "urgente") MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
-                                        shape = MaterialTheme.shapes.small
-                                    ) {
-                                        Text(
-                                            text = ann.priority.replaceFirstChar { it.uppercase() },
-                                            style = MaterialTheme.typography.labelSmall,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Surface(
+                                            color = if (ann.priority == "urgente") MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                            shape = MaterialTheme.shapes.small
+                                        ) {
+                                            Text(
+                                                text = ann.priority.replaceFirstChar { it.uppercase() },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                        if (canEditAnnouncement) {
+                                            IconButton(
+                                                onClick = { editingAnnouncement = ann },
+                                                modifier = Modifier.testTag("edit_announcement_${ann.id}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Edit,
+                                                    contentDescription = "Modifier l'annonce",
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                                 Text(ann.content, style = MaterialTheme.typography.bodyMedium)
@@ -323,6 +347,25 @@ fun CommunicationScreen(
             onSubmit = { scope, regId, schId, title, content, priority, authUids ->
                 onPublishAnnouncement(scope, regId, schId, title, content, priority, authUids)
                 showAnnouncementDialog = false
+            }
+        )
+    }
+
+    if (editingAnnouncement != null) {
+        val target = editingAnnouncement!!
+        PublishAnnouncementDialog(
+            role = role,
+            profile = profile,
+            regions = regions,
+            schools = schools,
+            classes = classes,
+            students = students,
+            managedUsers = managedUsers,
+            existingAnnouncement = target,
+            onDismiss = { editingAnnouncement = null },
+            onSubmit = { _, _, _, title, content, priority, _ ->
+                onUpdateAnnouncement(target, title, content, priority)
+                editingAnnouncement = null
             }
         )
     }
@@ -409,9 +452,11 @@ private fun PublishAnnouncementDialog(
     classes: List<SchoolClass>,
     students: List<Student>,
     managedUsers: List<UserProfile>,
+    existingAnnouncement: Announcement? = null,
     onDismiss: () -> Unit,
     onSubmit: (String, String, String, String, String, String, List<String>) -> Unit
 ) {
+    val isEdit = existingAnnouncement != null
     val allowedScopes = remember(role) {
         when (role) {
             UserRole.ADMIN_NATIONAL -> listOf("national", "regional", "school")
@@ -419,34 +464,53 @@ private fun PublishAnnouncementDialog(
             else -> listOf("school")
         }
     }
-    var scope by remember { mutableStateOf(allowedScopes.first()) }
-    var selectedRegion by remember { mutableStateOf(regions.firstOrNull()) }
-    var selectedSchool by remember { mutableStateOf(schools.firstOrNull()) }
-    var title by remember { mutableStateOf("") }
-    var content by remember { mutableStateOf("") }
-    var priority by remember { mutableStateOf("normale") }
+    var scope by remember(existingAnnouncement?.id) { mutableStateOf(existingAnnouncement?.scope ?: allowedScopes.first()) }
+    var selectedRegion by remember(existingAnnouncement?.id) { mutableStateOf(regions.firstOrNull()) }
+    var selectedSchool by remember(existingAnnouncement?.id) { mutableStateOf(schools.firstOrNull()) }
+    var title by remember(existingAnnouncement?.id) { mutableStateOf(existingAnnouncement?.title ?: "") }
+    var content by remember(existingAnnouncement?.id) { mutableStateOf(existingAnnouncement?.content ?: "") }
+    var priority by remember(existingAnnouncement?.id) { mutableStateOf(existingAnnouncement?.priority ?: "normale") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Publier une annonce officielle") },
+        title = { Text(if (isEdit) "Modifier l'annonce officielle" else "Publier une annonce officielle") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                DropdownSelector("Portée", allowedScopes, scope, {
-                    when (it) {
-                        "national" -> "Nationale"
-                        "regional" -> "Régionale"
-                        else -> "Établissement"
+                if (!isEdit) {
+                    DropdownSelector("Portée", allowedScopes, scope, {
+                        when (it) {
+                            "national" -> "Nationale"
+                            "regional" -> "Régionale"
+                            else -> "Établissement"
+                        }
+                    }, { scope = it })
+                    if (scope == "regional" && regions.isNotEmpty()) {
+                        DropdownSelector("Région", regions, selectedRegion, { it.name }, { selectedRegion = it })
                     }
-                }, { scope = it })
-                if (scope == "regional" && regions.isNotEmpty()) {
-                    DropdownSelector("Région", regions, selectedRegion, { it.name }, { selectedRegion = it })
-                }
-                if (scope == "school" && schools.isNotEmpty()) {
-                    DropdownSelector("Établissement", schools, selectedSchool, { it.name }, { selectedSchool = it })
+                    if (scope == "school" && schools.isNotEmpty()) {
+                        DropdownSelector("Établissement", schools, selectedSchool, { it.name }, { selectedSchool = it })
+                    }
+                } else {
+                    Text(
+                        text = "Portée : ${existingAnnouncement?.scope ?: scope}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
                 DropdownSelector("Priorité", listOf("normale", "importante", "urgente"), priority, { it.replaceFirstChar { c -> c.uppercase() } }, { priority = it })
-                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Titre de l'annonce *") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = content, onValueChange = { content = it }, label = { Text("Contenu *") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Titre de l'annonce *") },
+                    modifier = Modifier.fillMaxWidth().testTag("announcement_title_input")
+                )
+                OutlinedTextField(
+                    value = content,
+                    onValueChange = { content = it },
+                    label = { Text("Contenu *") },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth().testTag("announcement_content_input")
+                )
             }
         },
         confirmButton = {
@@ -454,7 +518,7 @@ private fun PublishAnnouncementDialog(
                 onClick = {
                     val regId = if (scope == "regional") (selectedRegion?.id ?: profile.regionId) else (selectedSchool?.regionId ?: profile.regionId)
                     val schId = if (scope == "school") (selectedSchool?.id ?: profile.schoolId) else ""
-                    val audience = buildList {
+                    val audience = if (isEdit) emptyList() else buildList {
                         managedUsers.forEach { u ->
                             if (scope == "national" || (scope == "school" && u.schoolId == schId) || (scope == "regional" && u.regionId == regId)) {
                                 add(u.userId)
@@ -473,8 +537,9 @@ private fun PublishAnnouncementDialog(
                     }.distinct()
                     onSubmit(scope, regId, schId, title, content, priority, audience)
                 },
-                enabled = title.trim().length >= 2 && content.trim().length >= 2
-            ) { Text("Publier") }
+                enabled = title.trim().length >= 2 && content.trim().length >= 2,
+                modifier = Modifier.testTag("save_announcement_button")
+            ) { Text(if (isEdit) "Enregistrer" else "Publier") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
     )

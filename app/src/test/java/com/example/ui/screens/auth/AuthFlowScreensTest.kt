@@ -47,18 +47,24 @@ class AuthFlowScreensTest {
         composeRule.onNodeWithText("Inscription Enseignant").assertExists()
         composeRule.onNodeWithTag("role_signup_google_button").performScrollTo().assertIsNotEnabled()
 
+        // Pick a school from official Djibouti-Ville directory
+        composeRule.onNodeWithTag("signup_open_school_picker_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("school_filter_college").performClick()
+        composeRule.onNodeWithTag("official_school_item_dj_col_boulaos").performClick()
+        composeRule.onNodeWithText("Collège de Boulaos (Collège)").assertExists()
+
         composeRule.onNodeWithTag("signup_fullname_input").performScrollTo().performTextInput("Moussa Ibrahim")
         composeRule.onNodeWithTag("signup_consent_checkbox").performScrollTo().performClick()
         composeRule.onNodeWithTag("role_signup_google_button").performScrollTo().assertIsEnabled()
 
         // Navigate back to role chooser and verify Parent screen
-        composeRule.onNodeWithTag("signup_back_button").performClick()
-        composeRule.onNodeWithTag("select_role_parent").performClick()
+        composeRule.onNodeWithTag("signup_back_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("select_role_parent").performScrollTo().performClick()
         composeRule.onNodeWithText("Inscription Parent").assertExists()
 
         // Navigate back to role chooser and verify Admin screen
-        composeRule.onNodeWithTag("signup_back_button").performClick()
-        composeRule.onNodeWithTag("select_role_admin").performClick()
+        composeRule.onNodeWithTag("signup_back_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("select_role_admin").performScrollTo().performClick()
         composeRule.onNodeWithText("Inscription Admin").assertExists()
     }
 }

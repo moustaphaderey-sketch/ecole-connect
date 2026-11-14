@@ -18,18 +18,22 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Class
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SupervisorAccount
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -39,6 +43,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +54,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.catalog.DjiboutiSchoolsCatalog
+import com.example.data.catalog.SchoolLevelFilter
 import com.example.data.model.AccessRequest
 import com.example.data.model.Region
 import com.example.data.model.RoleInvitation
@@ -61,6 +68,9 @@ import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
 import com.example.ui.components.DropdownSelector
 import com.example.ui.components.EmptyStateCard
+import com.example.ui.components.OfficialSchoolPickerDialog
+import com.example.ui.components.SchoolLevelFilterRow
+import com.example.ui.components.SchoolTypeBadge
 import com.example.ui.components.SectionHeader
 import com.example.ui.components.TabChipsRow
 
@@ -76,8 +86,13 @@ fun AdministrationScreen(
     invitations: List<RoleInvitation>,
     accessRequests: List<AccessRequest> = emptyList(),
     managedUsers: List<UserProfile>,
+    isBusy: Boolean = false,
+    targetTabName: String? = null,
+    onTargetTabConsumed: () -> Unit = {},
     onCreateRegion: (String, String) -> Unit,
     onCreateSchool: (Region, String, String, String, String) -> Unit,
+    onSetupDirectorSchool: (Region?, String, String, String, String, String) -> Unit = { _, _, _, _, _, _ -> },
+    onImportOfficialSchools: () -> Unit = {},
     onCreateClass: (School, String, String, String) -> Unit,
     onCreateSubject: (School, SchoolClass, String, String, Double, String, String) -> Unit,
     onCreateScheduleEntry: (School, SchoolClass, Subject, String, String, String, String) -> Unit,
@@ -87,24 +102,40 @@ fun AdministrationScreen(
     onSetUserActive: (UserProfile, Boolean) -> Unit,
     onAssignDirector: (School, UserProfile) -> Unit,
     onApproveAccessRequest: (AccessRequest, UserRole, String, School?) -> Unit = { _, _, _, _ -> },
-    onRejectAccessRequest: (AccessRequest) -> Unit = {}
+    onRejectAccessRequest: (AccessRequest) -> Unit = {},
+    onUpdateRegion: (Region, String, String) -> Unit = { _, _, _ -> },
+    onUpdateSchool: (School, Region?, String, String, String, String, String, String, Boolean) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onUpdateClass: (SchoolClass, String, String, String) -> Unit = { _, _, _, _ -> },
+    onUpdateSubject: (Subject, String, String, Double, String, String) -> Unit = { _, _, _, _, _, _ -> },
+    onUpdateScheduleEntry: (ScheduleEntry, Subject?, String, String, String, String) -> Unit = { _, _, _, _, _, _ -> },
+    onUpdateStudent: (Student, SchoolClass?, String, String, String, String, String, Boolean, Boolean) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onUpdateInvitation: (RoleInvitation, String, String, String) -> Unit = { _, _, _, _ -> },
+    onUpdateUser: (UserProfile, String, UserRole?, School?, Boolean) -> Unit = { _, _, _, _, _ -> }
 ) {
     val role = profile.roleEnum()
     val tabs = remember(role) {
         when (role) {
             UserRole.ADMIN_NATIONAL -> listOf("Régions", "Établissements", "Classes & Matières", "Élèves", "Comptes & Invitations")
             UserRole.ADMIN_REGIONAL -> listOf("Établissements", "Classes & Emplois du temps", "Élèves")
-            UserRole.DIRECTEUR -> listOf("Classes", "Matières", "Emploi du temps", "Élèves & Parents", "Comptes & Invitations")
+            UserRole.DIRECTEUR -> listOf("Classes", "Mon établissement", "Matières", "Emploi du temps", "Élèves & Parents", "Comptes & Invitations")
             else -> listOf("Emploi du temps", "Matières & Classes")
         }
     }
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
+    LaunchedEffect(targetTabName, tabs) {
+        if (targetTabName != null) {
+            val idx = tabs.indexOf(targetTabName)
+            if (idx >= 0) selectedTabIndex = idx
+            onTargetTabConsumed()
+        }
+    }
     val safeIndex = selectedTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
     val activeTabName = tabs[safeIndex]
 
     var showRegionDialog by remember { mutableStateOf(false) }
     var showSchoolDialog by remember { mutableStateOf(false) }
+    var showDirectorSchoolDialog by remember { mutableStateOf(false) }
     var showClassDialog by remember { mutableStateOf(false) }
     var showSubjectDialog by remember { mutableStateOf(false) }
     var showScheduleDialog by remember { mutableStateOf(false) }
@@ -113,16 +144,60 @@ fun AdministrationScreen(
     var linkParentTarget by remember { mutableStateOf<Student?>(null) }
     var assignDirectorSchool by remember { mutableStateOf<School?>(null) }
     var approveRequestTarget by remember { mutableStateOf<AccessRequest?>(null) }
+    var schoolLevelFilter by remember { mutableStateOf(SchoolLevelFilter.ALL) }
+    var schoolSearchQuery by remember { mutableStateOf("") }
+    var showDirectoryDialog by remember { mutableStateOf(false) }
+
+    var editingRegion by remember { mutableStateOf<Region?>(null) }
+    var editingSchool by remember { mutableStateOf<School?>(null) }
+    var editingClass by remember { mutableStateOf<SchoolClass?>(null) }
+    var editingSubject by remember { mutableStateOf<Subject?>(null) }
+    var editingSchedule by remember { mutableStateOf<ScheduleEntry?>(null) }
+    var editingStudent by remember { mutableStateOf<Student?>(null) }
+    var editingInvitation by remember { mutableStateOf<RoleInvitation?>(null) }
+    var editingUser by remember { mutableStateOf<UserProfile?>(null) }
 
     val canAddInTab = when (activeTabName) {
         "Régions" -> role == UserRole.ADMIN_NATIONAL
         "Établissements" -> role == UserRole.ADMIN_NATIONAL
+        "Mon établissement" -> role == UserRole.DIRECTEUR && schools.isEmpty()
         "Classes", "Classes & Matières" -> role == UserRole.DIRECTEUR || role == UserRole.ADMIN_NATIONAL
         "Matières" -> role == UserRole.DIRECTEUR || role == UserRole.ADMIN_NATIONAL
         "Emploi du temps" -> role == UserRole.DIRECTEUR || role == UserRole.ADMIN_NATIONAL
         "Élèves", "Élèves & Parents" -> role == UserRole.DIRECTEUR || role == UserRole.ADMIN_NATIONAL
         "Comptes & Invitations" -> role == UserRole.ADMIN_NATIONAL || role == UserRole.DIRECTEUR
         else -> false
+    }
+
+    val missingOfficialCount = remember(schools) {
+        DjiboutiSchoolsCatalog.allSchools.count { entry ->
+            schools.none { existing ->
+                existing.id == entry.id ||
+                    existing.code.equals(entry.code, ignoreCase = true) ||
+                    existing.name.equals(entry.name, ignoreCase = true)
+            }
+        }
+    }
+    val levelCounts = remember(schools) {
+        mapOf(
+            SchoolLevelFilter.ALL to schools.size,
+            SchoolLevelFilter.PRIMAIRE to schools.count { it.schoolType.equals("primaire", ignoreCase = true) },
+            SchoolLevelFilter.COLLEGE to schools.count { it.schoolType.equals("college", ignoreCase = true) },
+            SchoolLevelFilter.LYCEE to schools.count { it.schoolType.equals("lycee", ignoreCase = true) }
+        )
+    }
+    val filteredSchools = remember(schools, schoolLevelFilter, schoolSearchQuery) {
+        val cleanQ = schoolSearchQuery.trim().lowercase()
+        schools.filter { school ->
+            val levelOk = schoolLevelFilter.typeKey == null ||
+                school.schoolType.equals(schoolLevelFilter.typeKey, ignoreCase = true)
+            val queryOk = cleanQ.isBlank() ||
+                school.name.lowercase().contains(cleanQ) ||
+                school.code.lowercase().contains(cleanQ) ||
+                school.address.lowercase().contains(cleanQ) ||
+                school.regionName.lowercase().contains(cleanQ)
+            levelOk && queryOk
+        }.sortedWith(compareBy({ it.schoolType }, { it.name }))
     }
 
     Scaffold(
@@ -133,7 +208,14 @@ fun AdministrationScreen(
                         when (activeTabName) {
                             "Régions" -> showRegionDialog = true
                             "Établissements" -> showSchoolDialog = true
-                            "Classes", "Classes & Matières" -> showClassDialog = true
+                            "Mon établissement" -> showDirectorSchoolDialog = true
+                            "Classes", "Classes & Matières" -> {
+                                if (role == UserRole.DIRECTEUR && schools.isEmpty()) {
+                                    showDirectorSchoolDialog = true
+                                } else {
+                                    showClassDialog = true
+                                }
+                            }
                             "Matières" -> showSubjectDialog = true
                             "Emploi du temps" -> showScheduleDialog = true
                             "Élèves", "Élèves & Parents" -> showEnrollStudentDialog = true
@@ -190,13 +272,31 @@ fun AdministrationScreen(
                     } else {
                         items(regions, key = { it.id }) { region ->
                             ElevatedCard {
-                                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text("${region.name} (${region.code})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                    Text(
-                                        text = if (region.regionalAdminName.isNotBlank()) "Admin régional : ${region.regionalAdminName}" else "Aucun administrateur régional affecté",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text("${region.name} (${region.code})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                        Text(
+                                            text = if (region.regionalAdminName.isNotBlank()) "Admin régional : ${region.regionalAdminName}" else "Aucun administrateur régional affecté",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (role == UserRole.ADMIN_NATIONAL) {
+                                        IconButton(
+                                            onClick = { editingRegion = region },
+                                            modifier = Modifier.testTag("edit_region_${region.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Edit,
+                                                contentDescription = "Modifier la région ${region.name}",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -204,44 +304,234 @@ fun AdministrationScreen(
                 }
 
                 "Établissements" -> {
+                    if (role == UserRole.ADMIN_NATIONAL && missingOfficialCount > 0) {
+                        item {
+                            ElevatedCard(
+                                colors = CardDefaults.elevatedCardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "Répertoire officiel de Djibouti-Ville",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Text(
+                                        text = "$missingOfficialCount établissement(s) officiel(s) prêt(s) à importer (18 écoles primaires, 17 collèges publics, 4 lycées nationaux).",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Button(
+                                        onClick = onImportOfficialSchools,
+                                        enabled = !isBusy,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("import_official_schools_button")
+                                    ) {
+                                        Text(
+                                            if (isBusy) "Importation en cours..."
+                                            else "Importer les $missingOfficialCount établissements officiels"
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        OutlinedButton(
+                            onClick = { showDirectoryDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("open_official_directory_button")
+                        ) {
+                            Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(8.dp))
+                            Text("Consulter l'annuaire officiel Djibouti-Ville (${DjiboutiSchoolsCatalog.allSchools.size})")
+                        }
+                    }
+
                     if (schools.isEmpty()) {
                         item {
                             EmptyStateCard(
                                 icon = Icons.Filled.School,
                                 title = "Aucun établissement enregistré.",
-                                subtitle = "Créez d'abord une région puis ajoutez les écoles primaires, collèges et lycées."
+                                subtitle = "Importez en un clic les 39 écoles primaires, collèges et lycées de Djibouti-Ville ci-dessus ou créez un établissement manuellement."
                             )
+                        }
+                    } else {
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = schoolSearchQuery,
+                                    onValueChange = { schoolSearchQuery = it },
+                                    label = { Text("Filtrer par nom, code ou quartier") },
+                                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("admin_schools_search_input")
+                                )
+                                SchoolLevelFilterRow(
+                                    selectedFilter = schoolLevelFilter,
+                                    onSelectFilter = { schoolLevelFilter = it },
+                                    countsByLevel = levelCounts
+                                )
+                            }
+                        }
+
+                        if (filteredSchools.isEmpty()) {
+                            item {
+                                EmptyStateCard(
+                                    icon = Icons.Filled.Search,
+                                    title = "Aucun établissement trouvé.",
+                                    subtitle = "Essayez un autre niveau (Primaire, Collège, Lycée) ou modifiez votre recherche."
+                                )
+                            }
+                        } else {
+                            items(filteredSchools, key = { it.id }) { school ->
+                                ElevatedCard {
+                                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(school.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                            Spacer(Modifier.size(8.dp))
+                                            SchoolTypeBadge(schoolType = school.schoolType)
+                                            if (role == UserRole.ADMIN_NATIONAL || role == UserRole.ADMIN_REGIONAL) {
+                                                IconButton(
+                                                    onClick = { editingSchool = school },
+                                                    modifier = Modifier.testTag("edit_school_${school.id}")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Edit,
+                                                        contentDescription = "Modifier l'établissement ${school.name}",
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Text("Code : ${school.code} • Région : ${school.regionName}", style = MaterialTheme.typography.bodySmall)
+                                        if (school.sector.isNotBlank() || school.address.isNotBlank()) {
+                                            val locationLine = listOf(school.sector, school.address)
+                                                .filter { it.isNotBlank() }
+                                                .distinct()
+                                                .joinToString(" • ")
+                                            Text("Secteur / Adresse : $locationLine", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        if (school.description.isNotBlank()) {
+                                            Text(school.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        Text(
+                                            text = if (school.directorName.isNotBlank()) "Directeur : ${school.directorName}" else "Directeur non affecté",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        if (role == UserRole.ADMIN_NATIONAL) {
+                                            OutlinedButton(
+                                                onClick = { assignDirectorSchool = school },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Icon(Icons.Filled.SupervisorAccount, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                Text("  Affecter un directeur")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                "Mon établissement" -> {
+                    if (schools.isEmpty()) {
+                        item {
+                            ElevatedCard(
+                                colors = CardDefaults.elevatedCardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        text = "Aucun établissement rattaché à votre direction",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Text(
+                                        text = "Créez votre établissement ou sélectionnez-le dans le répertoire officiel de Djibouti-Ville pour pouvoir créer vos classes, matières et inscriptions.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Button(
+                                        onClick = { showDirectorSchoolDialog = true },
+                                        enabled = !isBusy,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("director_setup_school_button")
+                                    ) {
+                                        Text("Créer / associer mon établissement")
+                                    }
+                                }
+                            }
                         }
                     } else {
                         items(schools, key = { it.id }) { school ->
                             ElevatedCard {
                                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         Text(school.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
-                                            Text(
-                                                text = school.schoolType.replaceFirstChar { it.uppercase() },
-                                                style = MaterialTheme.typography.labelSmall,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                            )
+                                        Spacer(Modifier.size(8.dp))
+                                        SchoolTypeBadge(schoolType = school.schoolType)
+                                        if (role == UserRole.DIRECTEUR || role == UserRole.ADMIN_NATIONAL) {
+                                            IconButton(
+                                                onClick = { editingSchool = school },
+                                                modifier = Modifier.testTag("edit_director_school_${school.id}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Edit,
+                                                    contentDescription = "Modifier mon établissement",
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
                                         }
                                     }
-                                    Text("Code : ${school.code} • Région : ${school.regionName}", style = MaterialTheme.typography.bodySmall)
+                                    Text("Code : ${school.code} • Région : ${school.regionName.ifBlank { "Djibouti-Ville" }}", style = MaterialTheme.typography.bodySmall)
                                     if (school.address.isNotBlank()) {
-                                        Text("Adresse : ${school.address}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("Secteur / Adresse : ${school.address}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                    Text(
-                                        text = if (school.directorName.isNotBlank()) "Directeur : ${school.directorName}" else "Directeur non affecté",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    if (role == UserRole.ADMIN_NATIONAL) {
-                                        OutlinedButton(
-                                            onClick = { assignDirectorSchool = school },
-                                            modifier = Modifier.fillMaxWidth()
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                        Button(
+                                            onClick = { showClassDialog = true },
+                                            modifier = Modifier.weight(1f).testTag("director_school_card_create_class")
                                         ) {
-                                            Icon(Icons.Filled.SupervisorAccount, contentDescription = null, modifier = Modifier.size(18.dp))
-                                            Text("  Affecter un directeur")
+                                            Text("+ Créer une classe")
+                                        }
+                                        OutlinedButton(
+                                            onClick = { showSubjectDialog = true },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("+ Matière")
                                         }
                                     }
                                 }
@@ -251,13 +541,56 @@ fun AdministrationScreen(
                 }
 
                 "Classes", "Classes & Matières", "Matières & Classes" -> {
-                    if (role == UserRole.ADMIN_NATIONAL) {
+                    if (role == UserRole.DIRECTEUR && schools.isEmpty()) {
+                        item {
+                            ElevatedCard(
+                                colors = CardDefaults.elevatedCardColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "Établissement requis pour créer une classe",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                    Text(
+                                        text = "Votre compte directeur n'est pas encore lié à un établissement. Associez ou créez votre établissement ci-dessous en un instant.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                    Button(
+                                        onClick = { showDirectorSchoolDialog = true },
+                                        enabled = !isBusy,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("director_setup_school_banner_button")
+                                    ) {
+                                        Text("Configurer / Créer mon établissement")
+                                    }
+                                }
+                            }
+                        }
+                    } else if (role == UserRole.ADMIN_NATIONAL || role == UserRole.DIRECTEUR) {
                         item {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                                OutlinedButton(onClick = { showClassDialog = true }, modifier = Modifier.weight(1f)) {
+                                OutlinedButton(
+                                    onClick = { showClassDialog = true },
+                                    modifier = Modifier.weight(1f).testTag("open_create_class_button")
+                                ) {
                                     Text("+ Classe")
                                 }
-                                OutlinedButton(onClick = { showSubjectDialog = true }, modifier = Modifier.weight(1f)) {
+                                OutlinedButton(
+                                    onClick = { showSubjectDialog = true },
+                                    modifier = Modifier.weight(1f).testTag("open_create_subject_button")
+                                ) {
                                     Text("+ Matière")
                                 }
                             }
@@ -275,14 +608,32 @@ fun AdministrationScreen(
                         items(classes, key = { it.id }) { sc ->
                             val classSubjects = subjects.filter { it.classId == sc.id }
                             ElevatedCard {
-                                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text("${sc.name} • ${sc.level}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                    Text("${sc.schoolName} • Année ${sc.academicYear}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(
-                                        "${sc.studentUids.size} compte(s) élève • ${sc.parentUids.size} parent(s) • ${classSubjects.size} matière(s)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text("${sc.name} • ${sc.level}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                        Text("${sc.schoolName} • Année ${sc.academicYear}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            "${sc.studentUids.size} compte(s) élève • ${sc.parentUids.size} parent(s) • ${classSubjects.size} matière(s)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    if (role == UserRole.ADMIN_NATIONAL || role == UserRole.DIRECTEUR) {
+                                        IconButton(
+                                            onClick = { editingClass = sc },
+                                            modifier = Modifier.testTag("edit_class_${sc.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Edit,
+                                                contentDescription = "Modifier la classe ${sc.name}",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -292,7 +643,11 @@ fun AdministrationScreen(
                             Text("Matières configurées", style = MaterialTheme.typography.titleMedium)
                         }
                         items(subjects, key = { it.id }) { subj ->
-                            SubjectRowCard(subj)
+                            SubjectRowCard(
+                                subj = subj,
+                                canEdit = role == UserRole.ADMIN_NATIONAL || role == UserRole.DIRECTEUR,
+                                onEdit = { editingSubject = subj }
+                            )
                         }
                     }
                 }
@@ -308,7 +663,11 @@ fun AdministrationScreen(
                         }
                     } else {
                         items(subjects, key = { it.id }) { subj ->
-                            SubjectRowCard(subj)
+                            SubjectRowCard(
+                                subj = subj,
+                                canEdit = role == UserRole.ADMIN_NATIONAL || role == UserRole.DIRECTEUR,
+                                onEdit = { editingSubject = subj }
+                            )
                         }
                     }
                 }
@@ -341,6 +700,18 @@ fun AdministrationScreen(
                                             Text(details, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                     }
+                                    if (role == UserRole.ADMIN_NATIONAL || role == UserRole.DIRECTEUR) {
+                                        IconButton(
+                                            onClick = { editingSchedule = entry },
+                                            modifier = Modifier.testTag("edit_schedule_${entry.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Edit,
+                                                contentDescription = "Modifier le créneau",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -360,10 +731,28 @@ fun AdministrationScreen(
                         items(students, key = { it.id }) { student ->
                             ElevatedCard {
                                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text(student.fullName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
-                                            Text(student.matricule, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(student.fullName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
+                                                Text(student.matricule, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                            }
+                                            if (role == UserRole.ADMIN_NATIONAL || role == UserRole.DIRECTEUR) {
+                                                IconButton(
+                                                    onClick = { editingStudent = student },
+                                                    modifier = Modifier.testTag("edit_student_${student.id}")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Edit,
+                                                        contentDescription = "Modifier l'élève ${student.fullName}",
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                     Text("${student.schoolName} • ${student.className}", style = MaterialTheme.typography.bodySmall)
@@ -459,15 +848,35 @@ fun AdministrationScreen(
                         }
                     } else {
                         items(invitations, key = { it.id }) { inv ->
+                            val canEditInv = inv.status != "claimed" &&
+                                (role == UserRole.ADMIN_NATIONAL || inv.createdByUid == profile.userId)
                             ElevatedCard {
                                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text(inv.fullName, style = MaterialTheme.typography.titleMedium)
-                                        Surface(
-                                            color = if (inv.status == "claimed") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                                            shape = MaterialTheme.shapes.small
-                                        ) {
-                                            Text(inv.status, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(inv.fullName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Surface(
+                                                color = if (inv.status == "claimed") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                                shape = MaterialTheme.shapes.small
+                                            ) {
+                                                Text(inv.status, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                            }
+                                            if (canEditInv) {
+                                                IconButton(
+                                                    onClick = { editingInvitation = inv },
+                                                    modifier = Modifier.testTag("edit_invitation_${inv.id}")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Edit,
+                                                        contentDescription = "Modifier l'invitation",
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                     Text("${inv.email} • ${UserRole.fromKey(inv.role).labelFr}", style = MaterialTheme.typography.bodySmall)
@@ -492,6 +901,10 @@ fun AdministrationScreen(
                         }
                     } else {
                         items(managedUsers, key = { it.userId }) { user ->
+                            val canEditUser = user.userId != profile.userId && (
+                                role == UserRole.ADMIN_NATIONAL ||
+                                    (role == UserRole.DIRECTEUR && user.roleEnum() in listOf(UserRole.ENSEIGNANT, UserRole.PARENT, UserRole.ELEVE))
+                                )
                             ElevatedCard {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -507,9 +920,21 @@ fun AdministrationScreen(
                                             color = if (user.isActive) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
                                         )
                                     }
-                                    if (user.userId != profile.userId) {
-                                        OutlinedButton(onClick = { onSetUserActive(user, !user.isActive) }) {
-                                            Text(if (user.isActive) "Désactiver" else "Réactiver")
+                                    if (canEditUser) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            IconButton(
+                                                onClick = { editingUser = user },
+                                                modifier = Modifier.testTag("edit_user_${user.userId}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Edit,
+                                                    contentDescription = "Modifier le compte de ${user.fullName}",
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                            OutlinedButton(onClick = { onSetUserActive(user, !user.isActive) }) {
+                                                Text(if (user.isActive) "Désactiver" else "Réactiver")
+                                            }
                                         }
                                     }
                                 }
@@ -538,8 +963,22 @@ fun AdministrationScreen(
             regions = regions,
             onDismiss = { showSchoolDialog = false },
             onSubmit = { region, name, code, type, address ->
-                onCreateSchool(region, name, code, type, address)
+                if (region != null) {
+                    onCreateSchool(region, name, code, type, address)
+                }
                 showSchoolDialog = false
+            }
+        )
+    }
+
+    if (showDirectorSchoolDialog) {
+        CreateDirectorSchoolDialog(
+            regions = regions,
+            defaultNameHint = profile.schoolName,
+            onDismiss = { showDirectorSchoolDialog = false },
+            onSubmit = { region, name, code, type, address, officialId ->
+                onSetupDirectorSchool(region, name, code, type, address, officialId)
+                showDirectorSchoolDialog = false
             }
         )
     }
@@ -547,6 +986,11 @@ fun AdministrationScreen(
     if (showClassDialog) {
         CreateClassDialog(
             schools = schools,
+            allowDirectorSchoolSetup = role == UserRole.DIRECTEUR,
+            onSetupSchool = {
+                showClassDialog = false
+                showDirectorSchoolDialog = true
+            },
             onDismiss = { showClassDialog = false },
             onSubmit = { school, name, level, year ->
                 onCreateClass(school, name, level, year)
@@ -650,10 +1094,123 @@ fun AdministrationScreen(
             }
         )
     }
+
+    if (showDirectoryDialog) {
+        OfficialSchoolPickerDialog(
+            onDismiss = { showDirectoryDialog = false },
+            onSelectSchool = { showDirectoryDialog = false }
+        )
+    }
+
+    if (editingRegion != null) {
+        val target = editingRegion!!
+        EditRegionDialog(
+            region = target,
+            onDismiss = { editingRegion = null },
+            onSubmit = { name, code ->
+                onUpdateRegion(target, name, code)
+                editingRegion = null
+            }
+        )
+    }
+
+    if (editingSchool != null) {
+        val target = editingSchool!!
+        EditSchoolDialog(
+            school = target,
+            regions = regions,
+            onDismiss = { editingSchool = null },
+            onSubmit = { reg, name, code, type, address, sector, description, isActive ->
+                onUpdateSchool(target, reg, name, code, type, address, sector, description, isActive)
+                editingSchool = null
+            }
+        )
+    }
+
+    if (editingClass != null) {
+        val target = editingClass!!
+        EditClassDialog(
+            schoolClass = target,
+            onDismiss = { editingClass = null },
+            onSubmit = { name, level, year ->
+                onUpdateClass(target, name, level, year)
+                editingClass = null
+            }
+        )
+    }
+
+    if (editingSubject != null) {
+        val target = editingSubject!!
+        EditSubjectDialog(
+            subject = target,
+            managedUsers = managedUsers,
+            onDismiss = { editingSubject = null },
+            onSubmit = { name, code, coeff, teacherUid, teacherName ->
+                onUpdateSubject(target, name, code, coeff, teacherUid, teacherName)
+                editingSubject = null
+            }
+        )
+    }
+
+    if (editingSchedule != null) {
+        val target = editingSchedule!!
+        EditScheduleDialog(
+            entry = target,
+            subjects = subjects,
+            onDismiss = { editingSchedule = null },
+            onSubmit = { subj, day, start, end, room ->
+                onUpdateScheduleEntry(target, subj, day, start, end, room)
+                editingSchedule = null
+            }
+        )
+    }
+
+    if (editingStudent != null) {
+        val target = editingStudent!!
+        EditStudentDialog(
+            student = target,
+            classes = classes,
+            onDismiss = { editingStudent = null },
+            onSubmit = { targetClass, first, last, mat, dob, gender, visible, isActive ->
+                onUpdateStudent(target, targetClass, first, last, mat, dob, gender, visible, isActive)
+                editingStudent = null
+            }
+        )
+    }
+
+    if (editingInvitation != null) {
+        val target = editingInvitation!!
+        EditInvitationDialog(
+            invitation = target,
+            onDismiss = { editingInvitation = null },
+            onSubmit = { fullName, phone, status ->
+                onUpdateInvitation(target, fullName, phone, status)
+                editingInvitation = null
+            }
+        )
+    }
+
+    if (editingUser != null) {
+        val target = editingUser!!
+        EditManagedUserDialog(
+            actorRole = role,
+            targetUser = target,
+            schools = schools,
+            onDismiss = { editingUser = null },
+            onSubmit = { fullName, newRole, newSchool, isActive ->
+                onUpdateUser(target, fullName, newRole, newSchool, isActive)
+                editingUser = null
+            }
+        )
+    }
 }
 
 @Composable
-private fun SubjectRowCard(subj: Subject) {
+private fun SubjectRowCard(
+    subj: Subject,
+    canEdit: Boolean = false,
+    onEdit: () -> Unit = {}
+) {
     ElevatedCard {
         Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -668,6 +1225,18 @@ private fun SubjectRowCard(subj: Subject) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            if (canEdit) {
+                IconButton(
+                    onClick = onEdit,
+                    modifier = Modifier.testTag("edit_subject_${subj.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = "Modifier la matière ${subj.name}",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         }
     }
@@ -697,18 +1266,26 @@ private fun CreateRegionDialog(onDismiss: () -> Unit, onSubmit: (String, String)
 private fun CreateSchoolDialog(
     regions: List<Region>,
     onDismiss: () -> Unit,
-    onSubmit: (Region, String, String, String, String) -> Unit
+    onSubmit: (Region?, String, String, String, String) -> Unit
 ) {
-    var selectedRegion by remember { mutableStateOf(regions.firstOrNull()) }
+    var selectedRegion by remember(regions) { mutableStateOf(regions.firstOrNull()) }
     var name by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("primaire") }
     var address by remember { mutableStateOf("") }
+    var showCatalogPrefill by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Nouvel établissement scolaire") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { showCatalogPrefill = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Pré-remplir depuis le répertoire Djibouti-Ville")
+                }
                 DropdownSelector("Région *", regions, selectedRegion, { "${it.name} (${it.code})" }, { selectedRegion = it }, emptyLabel = "Créez d'abord une région")
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Nom de l'établissement *") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = code, onValueChange = { code = it }, label = { Text("Code officiel *") }, modifier = Modifier.fillMaxWidth())
@@ -724,15 +1301,128 @@ private fun CreateSchoolDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
     )
+
+    if (showCatalogPrefill) {
+        OfficialSchoolPickerDialog(
+            title = "Sélectionner un établissement officiel",
+            onDismiss = { showCatalogPrefill = false },
+            onSelectSchool = { entry ->
+                name = entry.name
+                code = entry.code
+                type = entry.schoolType
+                address = "${entry.address} — ${entry.sector}"
+                showCatalogPrefill = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun CreateDirectorSchoolDialog(
+    regions: List<Region>,
+    defaultNameHint: String = "",
+    onDismiss: () -> Unit,
+    onSubmit: (Region?, String, String, String, String, String) -> Unit
+) {
+    var selectedRegion by remember(regions) {
+        mutableStateOf(
+            regions.firstOrNull { it.id == DjiboutiSchoolsCatalog.REGION_ID || it.name.contains("Djibouti", ignoreCase = true) }
+                ?: regions.firstOrNull()
+        )
+    }
+    var name by remember { mutableStateOf(defaultNameHint) }
+    var code by remember { mutableStateOf("") }
+    var type by remember { mutableStateOf("primaire") }
+    var address by remember { mutableStateOf("") }
+    var officialSchoolId by remember { mutableStateOf("") }
+    var showCatalogPrefill by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Mon établissement scolaire") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { showCatalogPrefill = true },
+                    modifier = Modifier.fillMaxWidth().testTag("director_school_pick_official")
+                ) {
+                    Text("Choisir dans le répertoire Djibouti-Ville (39)")
+                }
+                if (regions.isNotEmpty()) {
+                    DropdownSelector("Région *", regions, selectedRegion, { "${it.name} (${it.code})" }, { selectedRegion = it })
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Région : Djibouti-Ville (DJV) — sélectionnée automatiquement",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = {
+                        name = it
+                        officialSchoolId = ""
+                    },
+                    label = { Text("Nom de l'établissement *") },
+                    modifier = Modifier.fillMaxWidth().testTag("director_school_name_input")
+                )
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it },
+                    label = { Text("Code officiel (ex: EP-REP, CB01) *") },
+                    modifier = Modifier.fillMaxWidth().testTag("director_school_code_input")
+                )
+                DropdownSelector("Type", listOf("primaire", "college", "lycee"), type, { it.replaceFirstChar { c -> c.uppercase() } }, { type = it })
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("Adresse / Quartier") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmit(selectedRegion, name, code, type, address, officialSchoolId) },
+                enabled = name.trim().length >= 2 && code.isNotBlank(),
+                modifier = Modifier.testTag("director_school_submit_button")
+            ) { Text("Enregistrer") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
+    )
+
+    if (showCatalogPrefill) {
+        OfficialSchoolPickerDialog(
+            title = "Choisir mon établissement (Djibouti-Ville)",
+            onDismiss = { showCatalogPrefill = false },
+            onSelectSchool = { entry ->
+                officialSchoolId = entry.id
+                name = entry.name
+                code = entry.code
+                type = entry.schoolType
+                address = "${entry.address} — ${entry.sector}"
+                showCatalogPrefill = false
+            }
+        )
+    }
 }
 
 @Composable
 private fun CreateClassDialog(
     schools: List<School>,
+    allowDirectorSchoolSetup: Boolean = false,
+    onSetupSchool: () -> Unit = {},
     onDismiss: () -> Unit,
     onSubmit: (School, String, String, String) -> Unit
 ) {
-    var selectedSchool by remember { mutableStateOf(schools.firstOrNull()) }
+    var selectedSchool by remember(schools) { mutableStateOf(schools.firstOrNull()) }
     var name by remember { mutableStateOf("") }
     var level by remember { mutableStateOf("") }
     var academicYear by remember { mutableStateOf("2026-2027") }
@@ -742,6 +1432,27 @@ private fun CreateClassDialog(
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 DropdownSelector("Établissement *", schools, selectedSchool, { it.name }, { selectedSchool = it }, emptyLabel = "Aucun établissement")
+                if (schools.isEmpty() && allowDirectorSchoolSetup) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "Aucun établissement rattaché à votre compte. Configurez votre établissement d'abord pour activer la création de classes.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            OutlinedButton(
+                                onClick = onSetupSchool,
+                                modifier = Modifier.fillMaxWidth().testTag("create_class_setup_school_button")
+                            ) {
+                                Text("Créer / associer mon établissement")
+                            }
+                        }
+                    }
+                }
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Nom de la classe (ex: 6ème A, CM2) *") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = level, onValueChange = { level = it }, label = { Text("Niveau (ex: 6ème, Primaire) *") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = academicYear, onValueChange = { academicYear = it }, label = { Text("Année scolaire") }, modifier = Modifier.fillMaxWidth())
@@ -750,7 +1461,8 @@ private fun CreateClassDialog(
         confirmButton = {
             Button(
                 onClick = { selectedSchool?.let { onSubmit(it, name, level, academicYear) } },
-                enabled = selectedSchool != null && name.isNotBlank() && level.isNotBlank()
+                enabled = selectedSchool != null && name.isNotBlank() && level.isNotBlank(),
+                modifier = Modifier.testTag("create_class_confirm_button")
             ) { Text("Créer") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
@@ -765,9 +1477,9 @@ private fun CreateSubjectDialog(
     onDismiss: () -> Unit,
     onSubmit: (School, SchoolClass, String, String, Double, String, String) -> Unit
 ) {
-    var selectedClass by remember { mutableStateOf(classes.firstOrNull()) }
+    var selectedClass by remember(classes) { mutableStateOf(classes.firstOrNull()) }
     val teachers = remember(managedUsers) { managedUsers.filter { it.roleEnum() == UserRole.ENSEIGNANT } }
-    var selectedTeacher by remember { mutableStateOf<UserProfile?>(teachers.firstOrNull()) }
+    var selectedTeacher by remember(teachers) { mutableStateOf<UserProfile?>(teachers.firstOrNull()) }
     var name by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var coeffText by remember { mutableStateOf("2") }
@@ -929,10 +1641,10 @@ private fun CreateInvitationDialog(
     var email by remember { mutableStateOf("") }
     var fullName by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
-    var selectedRegion by remember { mutableStateOf(regions.firstOrNull()) }
-    var selectedSchool by remember { mutableStateOf(schools.firstOrNull()) }
-    var selectedStudent by remember { mutableStateOf<Student?>(null) }
-    var selectedClass by remember { mutableStateOf<SchoolClass?>(null) }
+    var selectedRegion by remember(regions) { mutableStateOf(regions.firstOrNull()) }
+    var selectedSchool by remember(schools) { mutableStateOf(schools.firstOrNull()) }
+    var selectedStudent by remember(students) { mutableStateOf<Student?>(null) }
+    var selectedClass by remember(classes) { mutableStateOf<SchoolClass?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1039,7 +1751,7 @@ private fun AssignDirectorDialog(
 }
 
 @Composable
-private fun ApproveAccessRequestDialog(
+internal fun ApproveAccessRequestDialog(
     request: AccessRequest,
     regions: List<Region>,
     schools: List<School>,
@@ -1047,8 +1759,16 @@ private fun ApproveAccessRequestDialog(
     onSubmit: (UserRole, String, School?) -> Unit
 ) {
     var assignedRole by remember { mutableStateOf(UserRole.fromKey(request.requestedRole)) }
-    var selectedRegion by remember { mutableStateOf(regions.firstOrNull()) }
-    var selectedSchool by remember { mutableStateOf(schools.firstOrNull()) }
+    val matchedSchool = remember(request.schoolHint, schools) {
+        if (request.schoolHint.isBlank()) schools.firstOrNull()
+        else schools.firstOrNull { request.schoolHint.contains(it.name, ignoreCase = true) }
+            ?: schools.firstOrNull { it.name.contains(request.schoolHint.substringBefore("(").trim(), ignoreCase = true) }
+            ?: schools.firstOrNull()
+    }
+    var selectedSchool by remember(matchedSchool) { mutableStateOf(matchedSchool) }
+    var selectedRegion by remember(regions, matchedSchool) {
+        mutableStateOf(regions.firstOrNull { it.id == matchedSchool?.regionId } ?: regions.firstOrNull())
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,

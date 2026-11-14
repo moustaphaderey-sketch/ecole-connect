@@ -197,6 +197,28 @@ class CommunicationRepository(
         handleFirestoreError(it, OperationType.CREATE, "announcements", auth)
     }
 
+    suspend fun updateAnnouncement(
+        actor: UserProfile,
+        announcement: Announcement,
+        title: String,
+        content: String,
+        priority: String
+    ): Result<Unit> = runCatching {
+        db.collection("announcements").document(announcement.id)
+            .update(
+                mapOf(
+                    "title" to title.trim().take(160),
+                    "content" to content.trim().take(2500),
+                    "priority" to priority,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "announcements/${announcement.id}", auth)
+    }
+
     suspend fun markNotificationRead(notificationId: String): Result<Unit> = runCatching {
         db.collection("notifications").document(notificationId)
             .update(mapOf("read" to true, "updatedAt" to FieldValue.serverTimestamp()))

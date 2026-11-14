@@ -88,7 +88,31 @@ abstract class FirestoreEmulatorTestBase {
             } catch (_: FirebaseAuthInvalidUserException) {
                 auth.createUserWithEmailAndPassword(email, DEFAULT_PASSWORD).await()
             }
-            checkNotNull(result.user?.uid) { "User auth failed" }
+            val user = checkNotNull(result.user) { "User auth failed" }
+            if (!user.isEmailVerified) {
+                markEmailVerifiedInEmulator(user.uid)
+                user.reload().await()
+                user.getIdToken(true).await()
+                check(user.isEmailVerified) { "Email did not become verified in Auth emulator for $email" }
+            }
+            user.uid
+        }
+    }
+
+    private fun markEmailVerifiedInEmulator(uid: String) {
+        val url = java.net.URL("http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("Authorization", "Bearer owner")
+            conn.doOutput = true
+            val body = """{"localId":"$uid","emailVerified":true}"""
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            check(code in 200..299) { "Auth emulator accounts:update failed with HTTP $code" }
+        } finally {
+            conn.disconnect()
         }
     }
 

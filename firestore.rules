@@ -42,7 +42,7 @@ service cloud.firestore {
     }
 
     function hasUserDoc() {
-      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
     function userDoc() {
@@ -54,20 +54,29 @@ service cloud.firestore {
     }
 
     function isNationalAdminDoc() {
+      let uid = isSignedIn() ? request.auth.uid : '';
+      let hasDoc = uid != '' && exists(/databases/$(database)/documents/users/$(uid));
+      let u = hasDoc ? get(/databases/$(database)/documents/users/$(uid)).data : {'isActive': false, 'role': ''};
       return isSignedIn() && (
         isBootstrappedAdmin() ||
         (exists(/databases/$(database)/documents/platform_config/bootstrap) &&
-         get(/databases/$(database)/documents/platform_config/bootstrap).data.ownerUid == request.auth.uid) ||
-        (isUserActive() && userDoc().role == 'admin_national')
+         get(/databases/$(database)/documents/platform_config/bootstrap).data.ownerUid == uid) ||
+        (u.isActive == true && u.role == 'admin_national')
       );
     }
 
     function isRegionalAdminDoc() {
-      return isSignedIn() && isUserActive() && userDoc().role == 'admin_regional';
+      let uid = isSignedIn() ? request.auth.uid : '';
+      let hasDoc = uid != '' && exists(/databases/$(database)/documents/users/$(uid));
+      let u = hasDoc ? get(/databases/$(database)/documents/users/$(uid)).data : {'isActive': false, 'role': ''};
+      return uid != '' && u.isActive == true && u.role == 'admin_regional';
     }
 
     function isDirectorDoc() {
-      return isSignedIn() && isUserActive() && userDoc().role == 'directeur';
+      let uid = isSignedIn() ? request.auth.uid : '';
+      let hasDoc = uid != '' && exists(/databases/$(database)/documents/users/$(uid));
+      let u = hasDoc ? get(/databases/$(database)/documents/users/$(uid)).data : {'isActive': false, 'role': ''};
+      return uid != '' && u.isActive == true && u.role == 'directeur';
     }
 
     function isValidTenantMatch(data, expectedTenant) {
@@ -75,15 +84,38 @@ service cloud.firestore {
     }
 
     function isDirectorOfSchool(schoolId) {
-      return isDirectorDoc() &&
-             userDoc().get('schoolId', '') == schoolId &&
-             (!('tenantId' in userDoc()) || userDoc().tenantId == '' || userDoc().tenantId == schoolId);
+      let uid = isSignedIn() ? request.auth.uid : '';
+      let hasDoc = uid != '' && exists(/databases/$(database)/documents/users/$(uid));
+      let u = hasDoc ? get(/databases/$(database)/documents/users/$(uid)).data : {'isActive': false, 'role': ''};
+      return uid != '' &&
+             u.isActive == true &&
+             u.role == 'directeur' &&
+             u.get('schoolId', '') == schoolId &&
+             u.get('tenantId', '') in ['', schoolId];
     }
 
     function isTeacherOfSchool(schoolId) {
-      return isSignedIn() && isUserActive() && userDoc().role == 'enseignant' &&
-             userDoc().get('schoolId', '') == schoolId &&
-             (!('tenantId' in userDoc()) || userDoc().tenantId == '' || userDoc().tenantId == schoolId);
+      let uid = isSignedIn() ? request.auth.uid : '';
+      let hasDoc = uid != '' && exists(/databases/$(database)/documents/users/$(uid));
+      let u = hasDoc ? get(/databases/$(database)/documents/users/$(uid)).data : {'isActive': false, 'role': ''};
+      return uid != '' &&
+             u.isActive == true &&
+             u.role == 'enseignant' &&
+             u.get('schoolId', '') == schoolId &&
+             u.get('tenantId', '') in ['', schoolId];
+    }
+
+    function canWriteSchoolPedagogy(schoolId) {
+      let uid = isSignedIn() ? request.auth.uid : '';
+      let hasDoc = uid != '' && exists(/databases/$(database)/documents/users/$(uid));
+      let u = hasDoc ? get(/databases/$(database)/documents/users/$(uid)).data : {'isActive': false, 'role': ''};
+      return isNationalAdminDoc() || (
+        uid != '' &&
+        u.isActive == true &&
+        u.role in ['directeur', 'enseignant'] &&
+        u.get('schoolId', '') == schoolId &&
+        u.get('tenantId', '') in ['', schoolId]
+      );
     }
 
     function isBoundedStringList(lst, maxSize) {
@@ -209,7 +241,7 @@ service cloud.firestore {
 
     function isValidSchool(data) {
       return data.keys().hasAll(['name', 'code', 'schoolType', 'regionId', 'nationalAdminUid', 'isActive', 'createdByUid', 'createdAt']) &&
-             data.keys().hasOnly(['name', 'code', 'schoolType', 'regionId', 'tenantId', 'regionName', 'address', 'nationalAdminUid', 'regionalAdminUid', 'directorUid', 'directorName', 'authorizedUids', 'isActive', 'createdByUid', 'createdAt', 'updatedAt']) &&
+             data.keys().hasOnly(['name', 'code', 'schoolType', 'regionId', 'tenantId', 'regionName', 'address', 'sector', 'city', 'country', 'description', 'isOfficialCatalog', 'nationalAdminUid', 'regionalAdminUid', 'directorUid', 'directorName', 'authorizedUids', 'isActive', 'createdByUid', 'createdAt', 'updatedAt']) &&
              data.name is string && data.name.size() >= 2 && data.name.size() <= 160 &&
              data.code is string && data.code.size() >= 1 && data.code.size() <= 30 &&
              data.schoolType in ['primaire', 'college', 'lycee'] &&
@@ -217,6 +249,11 @@ service cloud.firestore {
              isOptString(data, 'tenantId', 128) &&
              isOptString(data, 'regionName', 120) &&
              isOptString(data, 'address', 240) &&
+             isOptString(data, 'sector', 120) &&
+             isOptString(data, 'city', 80) &&
+             isOptString(data, 'country', 60) &&
+             isOptString(data, 'description', 300) &&
+             (!('isOfficialCatalog' in data) || data.isOfficialCatalog is bool) &&
              data.nationalAdminUid is string && data.nationalAdminUid.size() <= 128 &&
              isOptString(data, 'regionalAdminUid', 128) &&
              isOptString(data, 'directorUid', 128) &&
@@ -647,6 +684,18 @@ service cloud.firestore {
          incoming().get('tenantId', '') == existing().get('tenantId', '') &&
          incoming().get('regionId', '') == existing().get('regionId', '') &&
          incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'consentAccepted', 'preferredChannel', 'updatedAt'])) ||
+        // Active director binding their own unassigned account to their newly created/claimed school ONCE
+        (request.auth.uid == userId &&
+         existing().role == 'directeur' &&
+         existing().isActive == true &&
+         existing().get('schoolId', '') == '' &&
+         incoming().role == existing().role &&
+         incoming().isActive == existing().isActive &&
+         incoming().get('schoolId', '') != '' &&
+         isValidTenantMatch(incoming(), incoming().get('schoolId', '')) &&
+         exists(/databases/$(database)/documents/schools/$(incoming().schoolId)) &&
+         get(/databases/$(database)/documents/schools/$(incoming().schoolId)).data.get('directorUid', '') == request.auth.uid &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['schoolId', 'tenantId', 'schoolName', 'regionId', 'directorUid', 'updatedAt'])) ||
         // Admin national update
         isNationalAdminDoc() ||
         // Director managing staff/parents/students of their own school tenant
@@ -747,6 +796,7 @@ service cloud.firestore {
     match /regions/{regionId} {
       allow get: if isSignedIn() && isValidId(regionId) && (
         isBootstrappedAdmin() ||
+        isUserActive() ||
         existing().nationalAdminUid == request.auth.uid ||
         existing().regionalAdminUid == request.auth.uid ||
         existing().createdByUid == request.auth.uid ||
@@ -755,14 +805,17 @@ service cloud.firestore {
       );
       allow list: if isSignedIn() && (
         isBootstrappedAdmin() ||
+        isUserActive() ||
         existing().nationalAdminUid == request.auth.uid ||
         existing().regionalAdminUid == request.auth.uid ||
         existing().createdByUid == request.auth.uid ||
         ('authorizedUids' in existing() && request.auth.uid in existing().authorizedUids)
       );
       allow create: if isSignedIn() && isValidId(regionId) && isValidRegion(incoming()) &&
-                       incoming().createdByUid == request.auth.uid &&
-                       isNationalAdminDoc();
+                       incoming().createdByUid == request.auth.uid && (
+        isNationalAdminDoc() ||
+        (isDirectorDoc() && userDoc().get('schoolId', '') == '' && regionId == 'reg_djibouti_ville')
+      );
       allow update: if isSignedIn() && isValidId(regionId) && isValidRegion(incoming()) &&
                        incoming().createdByUid == existing().createdByUid &&
                        incoming().createdAt == existing().createdAt &&
@@ -774,32 +827,43 @@ service cloud.firestore {
     match /schools/{schoolId} {
       allow get: if isSignedIn() && isValidId(schoolId) && (
         isBootstrappedAdmin() ||
-        existing().nationalAdminUid == request.auth.uid ||
-        existing().regionalAdminUid == request.auth.uid ||
-        existing().directorUid == request.auth.uid ||
+        existing().get('nationalAdminUid', '') == request.auth.uid ||
+        existing().get('regionalAdminUid', '') == request.auth.uid ||
+        existing().get('directorUid', '') == request.auth.uid ||
+        isDirectorOfSchool(schoolId) ||
+        (isDirectorDoc() && userDoc().get('schoolId', '') == '' && existing().get('directorUid', '') == '') ||
         ('authorizedUids' in existing() && request.auth.uid in existing().authorizedUids) ||
         isNationalAdminDoc()
       );
       allow list: if isSignedIn() && (
         isBootstrappedAdmin() ||
-        existing().nationalAdminUid == request.auth.uid ||
-        existing().regionalAdminUid == request.auth.uid ||
-        existing().directorUid == request.auth.uid ||
+        existing().get('nationalAdminUid', '') == request.auth.uid ||
+        existing().get('regionalAdminUid', '') == request.auth.uid ||
+        existing().get('directorUid', '') == request.auth.uid ||
+        (isDirectorDoc() && userDoc().get('schoolId', '') != '' && existing().get('tenantId', '') == userDoc().get('schoolId', '')) ||
         ('authorizedUids' in existing() && request.auth.uid in existing().authorizedUids)
       );
       allow create: if isSignedIn() && isValidId(schoolId) && isValidSchool(incoming()) &&
                        incoming().createdByUid == request.auth.uid &&
                        isValidTenantMatch(incoming(), schoolId) &&
-                       exists(/databases/$(database)/documents/regions/$(incoming().regionId)) &&
-                       (isNationalAdminDoc() || isRegionalAdminDoc());
+                       exists(/databases/$(database)/documents/regions/$(incoming().regionId)) && (
+        isNationalAdminDoc() ||
+        isRegionalAdminDoc() ||
+        (isDirectorDoc() && userDoc().get('schoolId', '') == '' && incoming().get('directorUid', '') == request.auth.uid)
+      );
       allow update: if isSignedIn() && isValidId(schoolId) && isValidSchool(incoming()) &&
                        incoming().createdByUid == existing().createdByUid &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().get('tenantId', '') == existing().get('tenantId', '') && (
-        isNationalAdminDoc() ||
-        existing().regionalAdminUid == request.auth.uid ||
-        existing().directorUid == request.auth.uid
-      ) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'code', 'schoolType', 'regionId', 'regionName', 'address', 'regionalAdminUid', 'directorUid', 'directorName', 'authorizedUids', 'isActive', 'updatedAt']);
+        ((isNationalAdminDoc() ||
+          existing().get('regionalAdminUid', '') == request.auth.uid ||
+          existing().get('directorUid', '') == request.auth.uid) &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'code', 'schoolType', 'regionId', 'regionName', 'address', 'sector', 'city', 'country', 'description', 'regionalAdminUid', 'directorUid', 'directorName', 'authorizedUids', 'isActive', 'updatedAt'])) ||
+        ((isDirectorOfSchool(schoolId) || (isDirectorDoc() && userDoc().get('schoolId', '') == '')) &&
+         existing().get('directorUid', '') == '' &&
+         incoming().get('directorUid', '') == request.auth.uid &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['directorUid', 'directorName', 'authorizedUids', 'updatedAt']))
+      );
       allow delete: if isSignedIn() && isValidId(schoolId) && isNationalAdminDoc();
     }
 
@@ -906,7 +970,7 @@ service cloud.firestore {
                        incoming().createdByUid == existing().createdByUid &&
                        incoming().createdAt == existing().createdAt &&
                        (isNationalAdminDoc() || existing().directorUid == request.auth.uid) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['dayOfWeek', 'startTime', 'endTime', 'room', 'teacherUid', 'teacherName', 'authorizedUids', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['subjectId', 'subjectName', 'dayOfWeek', 'startTime', 'endTime', 'room', 'teacherUid', 'teacherName', 'authorizedUids', 'updatedAt']);
       allow delete: if isSignedIn() && isValidId(scheduleId) && (isNationalAdminDoc() || existing().directorUid == request.auth.uid);
     }
 
@@ -944,7 +1008,7 @@ service cloud.firestore {
                        incoming().createdByUid == existing().createdByUid &&
                        incoming().createdAt == existing().createdAt &&
                        (isNationalAdminDoc() || existing().directorUid == request.auth.uid) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['classId', 'className', 'firstName', 'lastName', 'dateOfBirth', 'gender', 'parentUids', 'studentUid', 'gradesVisibleToStudent', 'isActive', 'teacherUids', 'authorizedUids', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['classId', 'className', 'firstName', 'lastName', 'matricule', 'dateOfBirth', 'gender', 'parentUids', 'studentUid', 'gradesVisibleToStudent', 'isActive', 'teacherUids', 'authorizedUids', 'updatedAt']);
       allow delete: if isSignedIn() && isValidId(studentId) && (isNationalAdminDoc() || existing().directorUid == request.auth.uid);
     }
 
@@ -973,7 +1037,7 @@ service cloud.firestore {
                        isValidTenantMatch(incoming(), incoming().schoolId) &&
                        exists(/databases/$(database)/documents/classes/$(incoming().classId)) &&
                        get(/databases/$(database)/documents/classes/$(incoming().classId)).data.schoolId == incoming().schoolId &&
-                       (isNationalAdminDoc() || isDirectorOfSchool(incoming().schoolId) || isTeacherOfSchool(incoming().schoolId));
+                       canWriteSchoolPedagogy(incoming().schoolId);
       allow update: if isSignedIn() && isValidId(lessonId) && isValidLesson(incoming()) &&
                        incoming().schoolId == existing().schoolId &&
                        incoming().get('tenantId', '') == existing().get('tenantId', '') &&
@@ -1015,7 +1079,7 @@ service cloud.firestore {
                        isValidTenantMatch(incoming(), incoming().schoolId) &&
                        exists(/databases/$(database)/documents/students/$(incoming().studentId)) &&
                        get(/databases/$(database)/documents/students/$(incoming().studentId)).data.schoolId == incoming().schoolId &&
-                       (isNationalAdminDoc() || isDirectorOfSchool(incoming().schoolId) || isTeacherOfSchool(incoming().schoolId));
+                       canWriteSchoolPedagogy(incoming().schoolId);
       allow update: if isSignedIn() && isValidId(assessmentId) && isValidAssessment(incoming()) &&
                        incoming().schoolId == existing().schoolId &&
                        incoming().get('tenantId', '') == existing().get('tenantId', '') &&
@@ -1055,14 +1119,14 @@ service cloud.firestore {
                        isValidTenantMatch(incoming(), incoming().schoolId) &&
                        exists(/databases/$(database)/documents/students/$(incoming().studentId)) &&
                        get(/databases/$(database)/documents/students/$(incoming().studentId)).data.schoolId == incoming().schoolId &&
-                       (isNationalAdminDoc() || isDirectorOfSchool(incoming().schoolId) || isTeacherOfSchool(incoming().schoolId));
+                       canWriteSchoolPedagogy(incoming().schoolId);
       allow update: if isSignedIn() && isValidId(attendanceId) && isValidAttendance(incoming()) &&
                        incoming().schoolId == existing().schoolId &&
                        incoming().get('tenantId', '') == existing().get('tenantId', '') &&
                        incoming().studentId == existing().studentId &&
                        incoming().createdAt == existing().createdAt && (
         isNationalAdminDoc() || existing().directorUid == request.auth.uid || existing().teacherUid == request.auth.uid
-      ) && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'minutesLate', 'justified', 'reason', 'parentUids', 'authorizedUids', 'updatedAt']);
+      ) && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'status', 'minutesLate', 'justified', 'reason', 'parentUids', 'authorizedUids', 'updatedAt']);
       allow delete: if isSignedIn() && isValidId(attendanceId) && (
         isNationalAdminDoc() || existing().directorUid == request.auth.uid || existing().teacherUid == request.auth.uid
       );
@@ -1093,7 +1157,7 @@ service cloud.firestore {
                        isValidTenantMatch(incoming(), incoming().schoolId) &&
                        exists(/databases/$(database)/documents/students/$(incoming().studentId)) &&
                        get(/databases/$(database)/documents/students/$(incoming().studentId)).data.schoolId == incoming().schoolId &&
-                       (isNationalAdminDoc() || isDirectorOfSchool(incoming().schoolId) || isTeacherOfSchool(incoming().schoolId));
+                       canWriteSchoolPedagogy(incoming().schoolId);
       allow update: if isSignedIn() && isValidId(difficultyId) && isValidDifficulty(incoming()) &&
                        incoming().schoolId == existing().schoolId &&
                        incoming().get('tenantId', '') == existing().get('tenantId', '') &&

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -331,6 +332,7 @@ fun OnboardingAndConsentGate(
                                 var schoolHint by remember(pendingDraft) {
                                     mutableStateOf(pendingDraft?.formattedSchoolHint() ?: "")
                                 }
+                                var showGateSchoolPicker by remember { mutableStateOf(false) }
 
                                 Text(
                                     text = if (pendingDraft != null) {
@@ -348,6 +350,11 @@ fun OnboardingAndConsentGate(
 
                                 if (gateState.accessRequest != null) {
                                     val req = gateState.accessRequest
+                                    val statusLabel = when (req.status) {
+                                        "approved" -> "Approuvée (activation en cours)"
+                                        "rejected" -> "Refusée par l'administration"
+                                        else -> "En attente de validation par l'Administrateur National"
+                                    }
                                     Surface(
                                         color = MaterialTheme.colorScheme.secondaryContainer,
                                         shape = MaterialTheme.shapes.small,
@@ -363,13 +370,20 @@ fun OnboardingAndConsentGate(
                                             ) {
                                                 Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                                                 Text(
-                                                    text = "Inscription enregistrée (${UserRole.fromKey(req.requestedRole).labelFr}) — Statut : ${req.status}",
+                                                    text = "Inscription enregistrée (${UserRole.fromKey(req.requestedRole).labelFr}) — Statut : $statusLabel",
                                                     style = MaterialTheme.typography.bodySmall
                                                 )
                                             }
                                             if (req.schoolHint.isNotBlank()) {
                                                 Text(
                                                     text = "Rattachement demandé : ${req.schoolHint}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                )
+                                            }
+                                            if (req.status == "pending") {
+                                                Text(
+                                                    text = "Dès que l'Administrateur National approuvera votre demande dans Établissements & Classes → Comptes & Invitations, l'activation de votre compte s'affichera automatiquement ici.",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                                 )
@@ -411,6 +425,14 @@ fun OnboardingAndConsentGate(
                                         label = { Text("Établissement / Région / Détails") },
                                         modifier = Modifier.fillMaxWidth()
                                     )
+                                    OutlinedButton(
+                                        onClick = { showGateSchoolPicker = true },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.size(8.dp))
+                                        Text("Choisir une école, collège ou lycée (Djibouti-Ville)")
+                                    }
                                     OutlinedTextField(
                                         value = phone,
                                         onValueChange = { phone = it.take(40) },
@@ -424,6 +446,16 @@ fun OnboardingAndConsentGate(
                                     ) {
                                         Text("Envoyer ma demande d'inscription")
                                     }
+                                }
+
+                                if (showGateSchoolPicker) {
+                                    OfficialSchoolPickerDialog(
+                                        onDismiss = { showGateSchoolPicker = false },
+                                        onSelectSchool = { entry ->
+                                            schoolHint = "${entry.name} (${entry.levelLabelFr})".take(160)
+                                            showGateSchoolPicker = false
+                                        }
+                                    )
                                 }
                             }
                         }

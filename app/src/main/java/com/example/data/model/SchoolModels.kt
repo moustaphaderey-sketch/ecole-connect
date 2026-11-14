@@ -3,6 +3,7 @@ package com.example.data.model
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
 
 enum class UserRole(val key: String, val labelFr: String) {
@@ -48,6 +49,8 @@ data class UserProfile(
     val directorUid: String = "",
     val classIds: List<String> = emptyList(),
     val studentIds: List<String> = emptyList(),
+    @get:PropertyName("isActive")
+    @field:PropertyName("isActive")
     val isActive: Boolean = true,
     val consentAccepted: Boolean = false,
     val preferredChannel: String = "app",
@@ -132,11 +135,20 @@ data class School(
     val tenantId: String = "",
     val regionName: String = "",
     val address: String = "",
+    val sector: String = "",
+    val city: String = "Djibouti-Ville",
+    val country: String = "Djibouti",
+    val description: String = "",
+    @get:PropertyName("isOfficialCatalog")
+    @field:PropertyName("isOfficialCatalog")
+    val isOfficialCatalog: Boolean = false,
     val nationalAdminUid: String = "",
     val regionalAdminUid: String = "",
     val directorUid: String = "",
     val directorName: String = "",
     val authorizedUids: List<String> = emptyList(),
+    @get:PropertyName("isActive")
+    @field:PropertyName("isActive")
     val isActive: Boolean = true,
     val createdByUid: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -230,6 +242,8 @@ data class Student(
     val parentUids: List<String> = emptyList(),
     val studentUid: String = "",
     val gradesVisibleToStudent: Boolean = true,
+    @get:PropertyName("isActive")
+    @field:PropertyName("isActive")
     val isActive: Boolean = true,
     val nationalAdminUid: String = "",
     val regionalAdminUid: String = "",

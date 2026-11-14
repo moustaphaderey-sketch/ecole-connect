@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FamilyRestroom
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.School
@@ -72,6 +73,8 @@ import com.example.auth.PendingRegistrationDraft
 import com.example.auth.RegistrationCategory
 import com.example.data.model.UserRole
 import com.example.ui.components.DropdownSelector
+import com.example.ui.components.OfficialSchoolPickerDialog
+import com.example.ui.screens.AboutUsDialog
 
 private sealed interface AuthRoute {
     data object Login : AuthRoute
@@ -218,6 +221,8 @@ private fun LoginScreen(
     onGoToRegister: () -> Unit,
     onQuickRegisterRole: (RegistrationCategory) -> Unit
 ) {
+    var showAboutDialog by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .verticalScroll(rememberScrollState())
@@ -365,6 +370,21 @@ private fun LoginScreen(
                 }
             }
         }
+
+        TextButton(
+            onClick = { showAboutDialog = true },
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("login_about_us_button")
+        ) {
+            Icon(Icons.Filled.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.size(6.dp))
+            Text("À propos de nous • ÉCOLE CONNECTÉE")
+        }
+    }
+
+    if (showAboutDialog) {
+        AboutUsDialog(onDismiss = { showAboutDialog = false })
     }
 }
 
@@ -482,6 +502,7 @@ private fun RoleSignUpScreen(
     var schoolOrRegionHint by remember(category) { mutableStateOf("") }
     var extraDetail by remember(category) { mutableStateOf("") }
     var consentAccepted by remember(category) { mutableStateOf(false) }
+    var showSchoolPicker by remember { mutableStateOf(false) }
 
     val accent = category.accentColor()
     val isFormValid = fullName.trim().length >= 2 && consentAccepted
@@ -620,6 +641,17 @@ private fun RoleSignUpScreen(
                 .testTag("signup_school_input")
         )
 
+        OutlinedButton(
+            onClick = { showSchoolPicker = true },
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("signup_open_school_picker_button")
+        ) {
+            Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.size(8.dp))
+            Text("Choisir une école, collège ou lycée (Djibouti-Ville)")
+        }
+
         OutlinedTextField(
             value = extraDetail,
             onValueChange = { extraDetail = it },
@@ -700,6 +732,16 @@ private fun RoleSignUpScreen(
         ) {
             Text("Déjà inscrit ? Se connecter avec Google")
         }
+    }
+
+    if (showSchoolPicker) {
+        OfficialSchoolPickerDialog(
+            onDismiss = { showSchoolPicker = false },
+            onSelectSchool = { entry ->
+                schoolOrRegionHint = "${entry.name} (${entry.levelLabelFr})"
+                showSchoolPicker = false
+            }
+        )
     }
 }
 

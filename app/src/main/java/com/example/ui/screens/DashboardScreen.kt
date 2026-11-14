@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Class
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Schedule
@@ -87,9 +88,14 @@ fun DashboardScreen(
     difficulties: List<DifficultyAlert>,
     announcements: List<Announcement>,
     notifications: List<NotificationItem>,
+    pendingAccessRequestsCount: Int = 0,
+    isBusy: Boolean = false,
     selectedChildId: String?,
     onSelectChild: (String) -> Unit,
     onNavigate: (AppSection) -> Unit,
+    onOpenPendingApprovals: () -> Unit = {},
+    onOpenDirectorSchoolSetup: () -> Unit = {},
+    onImportOfficialSchools: () -> Unit = {},
     onUpdateSettings: (String, Double, Boolean, Boolean) -> Unit
 ) {
     val role = profile.roleEnum()
@@ -157,6 +163,155 @@ fun DashboardScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                     )
+                }
+            }
+        }
+
+        if (role == UserRole.ADMIN_NATIONAL && pendingAccessRequestsCount > 0) {
+            item {
+                ElevatedCard(
+                    onClick = onOpenPendingApprovals,
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.NotificationsActive,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            Text(
+                                text = "$pendingAccessRequestsCount inscription(s) en attente de validation",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                        Text(
+                            text = "De nouveaux comptes (Enseignant, Parent, Directeur…) ont soumis leur inscription Google et attendent votre approbation dans Comptes & Invitations.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Button(
+                            onClick = onOpenPendingApprovals,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("dashboard_pending_approvals_button")
+                        ) {
+                            Text("Voir et valider maintenant")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (role == UserRole.ADMIN_NATIONAL && schools.isEmpty()) {
+            item {
+                ElevatedCard(
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.School,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                text = "Importer les établissements de Djibouti-Ville",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                        Text(
+                            text = "Chargez en un clic le répertoire officiel des 18 écoles primaires, 17 collèges publics et 4 lycées nationaux de Djibouti-Ville.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Button(
+                            onClick = onImportOfficialSchools,
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("dashboard_import_official_schools_button")
+                        ) {
+                            Text(
+                                if (isBusy) "Importation en cours..."
+                                else "Importer les 39 établissements officiels"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (role == UserRole.DIRECTEUR && schools.isEmpty()) {
+            item {
+                ElevatedCard(
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.School,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            Text(
+                                text = "Configurez votre établissement scolaire",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                        Text(
+                            text = "Associez ou créez votre établissement afin de pouvoir créer vos classes, matières et inscriptions.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Button(
+                            onClick = onOpenDirectorSchoolSetup,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("dashboard_director_setup_school_button")
+                        ) {
+                            Text("Configurer mon établissement")
+                        }
+                    }
                 }
             }
         }
@@ -448,6 +603,17 @@ fun DashboardScreen(
                         )
                     }
                 }
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { onNavigate(AppSection.A_PROPOS) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dashboard_about_us_button")
+            ) {
+                Icon(Icons.Filled.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.size(8.dp))
+                Text("À propos d'ÉCOLE CONNECTÉE")
             }
             Spacer(Modifier.height(16.dp))
         }

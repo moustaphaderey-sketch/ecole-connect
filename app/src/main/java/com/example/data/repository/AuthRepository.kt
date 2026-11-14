@@ -6,6 +6,7 @@ import com.example.data.model.RoleInvitation
 import com.example.data.model.UserPrivateContact
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
+import com.example.data.seed.DjiboutiSchoolsSeeder
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -113,12 +114,37 @@ class AuthRepository(
         }
     }
 
+    fun observePendingInvitationForEmail(email: String): Flow<RoleInvitation?> {
+        val normalized = email.trim().lowercase()
+        if (normalized.isBlank()) return kotlinx.coroutines.flow.flowOf(null)
+        return db.collection("role_invitations")
+            .whereEqualTo("email", normalized)
+            .whereEqualTo("status", "pending")
+            .limit(1)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.documents.firstOrNull()
+                    ?.toObject(RoleInvitation::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, "role_invitations", auth)
+                }
+                emit(null)
+            }
+    }
+
     suspend fun bootstrapNationalAdmin(
         uid: String,
         fullName: String,
         email: String,
         phone: String,
-        consentAccepted: Boolean
+        consentAccepted: Boolean,
+        seedOfficialSchools: Boolean = true
     ): Result<Unit> = runCatching {
         val cleanName = fullName.trim().ifBlank { "Administrateur National" }
         val bootstrapRef = db.collection("platform_config").document("bootstrap")
@@ -193,6 +219,16 @@ class AuthRepository(
             )
         )
         batch.commit().await()
+        if (seedOfficialSchools) {
+            DjiboutiSchoolsSeeder(db, auth)
+                .seed(
+                    actorUid = uid,
+                    actorName = cleanName,
+                    actorRole = UserRole.ADMIN_NATIONAL.key,
+                    nationalAdminUid = uid
+                )
+                .getOrThrow()
+        }
         Unit
     }.onFailure {
         handleFirestoreError(it, OperationType.WRITE, "users/$uid", auth)
@@ -232,7 +268,8 @@ class AuthRepository(
         if (invitation.schoolName.isNotBlank()) userPayload["schoolName"] = invitation.schoolName
         if (invitation.nationalAdminUid.isNotBlank()) userPayload["nationalAdminUid"] = invitation.nationalAdminUid
         if (invitation.regionalAdminUid.isNotBlank()) userPayload["regionalAdminUid"] = invitation.regionalAdminUid
-        if (invitation.directorUid.isNotBlank()) userPayload["directorUid"] = invitation.directorUid
+        val resolvedDirUid = if (invitation.role == UserRole.DIRECTEUR.key) uid else invitation.directorUid
+        if (resolvedDirUid.isNotBlank()) userPayload["directorUid"] = resolvedDirUid
         if (invitation.classIds.isNotEmpty()) userPayload["classIds"] = invitation.classIds
         if (invitation.studentIds.isNotEmpty()) userPayload["studentIds"] = invitation.studentIds
 
@@ -243,7 +280,7 @@ class AuthRepository(
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
         )
-        if (invitation.directorUid.isNotBlank()) contactPayload["directorUid"] = invitation.directorUid
+        if (resolvedDirUid.isNotBlank()) contactPayload["directorUid"] = resolvedDirUid
 
         val batch = db.batch()
         batch.set(userRef, userPayload)
@@ -267,13 +304,33 @@ class AuthRepository(
                 "targetId" to invitation.id,
                 "schoolId" to invitation.schoolId,
                 "tenantId" to resolvedTenantId,
-                "directorUid" to invitation.directorUid,
+                "directorUid" to resolvedDirUid,
                 "nationalAdminUid" to invitation.nationalAdminUid,
                 "details" to "Activation du compte ${invitation.role} via invitation vérifiée.",
                 "createdAt" to FieldValue.serverTimestamp()
             )
         )
         batch.commit().await()
+
+        if (invitation.role == UserRole.DIRECTEUR.key && invitation.schoolId.isNotBlank()) {
+            runCatching {
+                val schoolRef = db.collection("schools").document(invitation.schoolId)
+                val schoolSnap = schoolRef.get().await()
+                if (schoolSnap.exists()) {
+                    val existingDirector = schoolSnap.getString("directorUid").orEmpty()
+                    if (existingDirector.isBlank() || existingDirector == uid) {
+                        schoolRef.update(
+                            mapOf(
+                                "directorUid" to uid,
+                                "directorName" to cleanName,
+                                "authorizedUids" to FieldValue.arrayUnion(uid),
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        ).await()
+                    }
+                }
+            }
+        }
         Unit
     }.onFailure {
         handleFirestoreError(it, OperationType.WRITE, "users/$uid", auth)

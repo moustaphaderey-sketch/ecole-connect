@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -29,6 +30,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -81,11 +83,24 @@ fun CahierTexteScreen(
         homework: String,
         homeworkDueDate: String,
         attachmentLabel: String
-    ) -> Unit
+    ) -> Unit,
+    onUpdateLesson: (
+        lesson: LessonEntry,
+        lessonDate: String,
+        chapter: String,
+        title: String,
+        summary: String,
+        skillsWorked: String,
+        classExercises: String,
+        homework: String,
+        homeworkDueDate: String,
+        attachmentLabel: String
+    ) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> }
 ) {
     val role = profile.roleEnum()
     val canCreateLesson = role == UserRole.ENSEIGNANT || role == UserRole.DIRECTEUR || role == UserRole.ADMIN_NATIONAL
     var showCreateDialog by remember { mutableStateOf(false) }
+    var editingLesson by remember { mutableStateOf<LessonEntry?>(null) }
 
     var dateMode by remember { mutableStateOf("all") } // today, yesterday, custom, all
     var customDate by remember { mutableStateOf(DateUtils.todayIso()) }
@@ -233,7 +248,14 @@ fun CahierTexteScreen(
                 }
             } else {
                 items(filteredLessons, key = { it.id }) { lesson ->
-                    LessonDetailCard(lesson)
+                    val canEditLesson = role == UserRole.ADMIN_NATIONAL ||
+                        role == UserRole.DIRECTEUR ||
+                        (role == UserRole.ENSEIGNANT && lesson.teacherUid == profile.userId)
+                    LessonDetailCard(
+                        lesson = lesson,
+                        canEdit = canEditLesson,
+                        onEdit = { editingLesson = lesson }
+                    )
                 }
             }
 
@@ -248,15 +270,36 @@ fun CahierTexteScreen(
             subjects = subjects,
             onDismiss = { showCreateDialog = false },
             onSubmit = { school, sc, subj, date, chapter, title, summary, skills, exercises, hw, due, attach ->
-                onPublishLesson(school, sc, subj, date, chapter, title, summary, skills, exercises, hw, due, attach)
+                if (sc != null && subj != null) {
+                    onPublishLesson(school, sc, subj, date, chapter, title, summary, skills, exercises, hw, due, attach)
+                }
                 showCreateDialog = false
+            }
+        )
+    }
+
+    if (editingLesson != null) {
+        val target = editingLesson!!
+        CreateLessonDialog(
+            schools = schools,
+            classes = classes,
+            subjects = subjects,
+            existingLesson = target,
+            onDismiss = { editingLesson = null },
+            onSubmit = { _, _, _, date, chapter, title, summary, skills, exercises, hw, due, attach ->
+                onUpdateLesson(target, date, chapter, title, summary, skills, exercises, hw, due, attach)
+                editingLesson = null
             }
         )
     }
 }
 
 @Composable
-private fun LessonDetailCard(lesson: LessonEntry) {
+private fun LessonDetailCard(
+    lesson: LessonEntry,
+    canEdit: Boolean,
+    onEdit: () -> Unit
+) {
     ElevatedCard(
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -280,12 +323,26 @@ private fun LessonDetailCard(lesson: LessonEntry) {
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
-                Text(
-                    text = DateUtils.formatFrenchShort(lesson.lessonDate),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.secondary,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = DateUtils.formatFrenchShort(lesson.lessonDate),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (canEdit) {
+                        IconButton(
+                            onClick = onEdit,
+                            modifier = Modifier.testTag("edit_lesson_${lesson.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = "Modifier la leçon",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
             }
 
             Text(
@@ -371,11 +428,12 @@ private fun CreateLessonDialog(
     schools: List<School>,
     classes: List<SchoolClass>,
     subjects: List<Subject>,
+    existingLesson: LessonEntry? = null,
     onDismiss: () -> Unit,
     onSubmit: (
         school: School?,
-        schoolClass: SchoolClass,
-        subject: Subject,
+        schoolClass: SchoolClass?,
+        subject: Subject?,
         lessonDate: String,
         chapter: String,
         title: String,
@@ -387,25 +445,30 @@ private fun CreateLessonDialog(
         attachmentLabel: String
     ) -> Unit
 ) {
-    var selectedClass by remember { mutableStateOf(classes.firstOrNull()) }
+    val isEdit = existingLesson != null
+    var selectedClass by remember(existingLesson?.id) {
+        mutableStateOf(classes.firstOrNull { it.id == existingLesson?.classId } ?: classes.firstOrNull())
+    }
     val classSubjects = remember(subjects, selectedClass) {
         subjects.filter { selectedClass == null || it.classId == selectedClass!!.id }
     }
-    var selectedSubject by remember(classSubjects) { mutableStateOf(classSubjects.firstOrNull()) }
+    var selectedSubject by remember(classSubjects, existingLesson?.id) {
+        mutableStateOf(classSubjects.firstOrNull { it.id == existingLesson?.subjectId } ?: classSubjects.firstOrNull())
+    }
 
-    var lessonDate by remember { mutableStateOf(DateUtils.todayIso()) }
-    var chapter by remember { mutableStateOf("") }
-    var title by remember { mutableStateOf("") }
-    var summary by remember { mutableStateOf("") }
-    var skillsWorked by remember { mutableStateOf("") }
-    var classExercises by remember { mutableStateOf("") }
-    var homework by remember { mutableStateOf("") }
-    var homeworkDueDate by remember { mutableStateOf("") }
-    var attachmentLabel by remember { mutableStateOf("") }
+    var lessonDate by remember(existingLesson?.id) { mutableStateOf(existingLesson?.lessonDate ?: DateUtils.todayIso()) }
+    var chapter by remember(existingLesson?.id) { mutableStateOf(existingLesson?.chapter ?: "") }
+    var title by remember(existingLesson?.id) { mutableStateOf(existingLesson?.title ?: "") }
+    var summary by remember(existingLesson?.id) { mutableStateOf(existingLesson?.summary ?: "") }
+    var skillsWorked by remember(existingLesson?.id) { mutableStateOf(existingLesson?.skillsWorked ?: "") }
+    var classExercises by remember(existingLesson?.id) { mutableStateOf(existingLesson?.classExercises ?: "") }
+    var homework by remember(existingLesson?.id) { mutableStateOf(existingLesson?.homework ?: "") }
+    var homeworkDueDate by remember(existingLesson?.id) { mutableStateOf(existingLesson?.homeworkDueDate ?: "") }
+    var attachmentLabel by remember(existingLesson?.id) { mutableStateOf(existingLesson?.attachmentLabel ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Nouvelle entrée — Cahier de texte") },
+        title = { Text(if (isEdit) "Modifier la leçon" else "Nouvelle entrée — Cahier de texte") },
         text = {
             Column(
                 modifier = Modifier
@@ -413,22 +476,30 @@ private fun CreateLessonDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                DropdownSelector(
-                    label = "Classe",
-                    options = classes,
-                    selectedOption = selectedClass,
-                    optionLabel = { "${it.name} (${it.schoolName})" },
-                    onOptionSelected = { selectedClass = it },
-                    emptyLabel = "Aucune classe enregistrée"
-                )
-                DropdownSelector(
-                    label = "Matière",
-                    options = classSubjects,
-                    selectedOption = selectedSubject,
-                    optionLabel = { it.name },
-                    onOptionSelected = { selectedSubject = it },
-                    emptyLabel = "Aucune matière pour cette classe"
-                )
+                if (isEdit && existingLesson != null) {
+                    Text(
+                        text = "${existingLesson.subjectName} • ${existingLesson.className}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    DropdownSelector(
+                        label = "Classe",
+                        options = classes,
+                        selectedOption = selectedClass,
+                        optionLabel = { "${it.name} (${it.schoolName})" },
+                        onOptionSelected = { selectedClass = it },
+                        emptyLabel = "Aucune classe enregistrée"
+                    )
+                    DropdownSelector(
+                        label = "Matière",
+                        options = classSubjects,
+                        selectedOption = selectedSubject,
+                        optionLabel = { it.name },
+                        onOptionSelected = { selectedSubject = it },
+                        emptyLabel = "Aucune matière pour cette classe"
+                    )
+                }
                 OutlinedTextField(
                     value = lessonDate,
                     onValueChange = { lessonDate = it },
@@ -489,19 +560,21 @@ private fun CreateLessonDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val sc = selectedClass ?: return@Button
-                    val subj = selectedSubject ?: return@Button
-                    val school = schools.firstOrNull { it.id == sc.schoolId }
-                    onSubmit(
-                        school, sc, subj, lessonDate, chapter, title, summary,
-                        skillsWorked, classExercises, homework, homeworkDueDate, attachmentLabel
-                    )
+                    val sc = selectedClass
+                    val subj = selectedSubject
+                    val school = sc?.let { s -> schools.firstOrNull { it.id == s.schoolId } }
+                    if (isEdit || (sc != null && subj != null)) {
+                        onSubmit(
+                            school, sc, subj, lessonDate, chapter, title, summary,
+                            skillsWorked, classExercises, homework, homeworkDueDate, attachmentLabel
+                        )
+                    }
                 },
-                enabled = selectedClass != null && selectedSubject != null &&
-                    lessonDate.length == 10 && chapter.isNotBlank() && title.length >= 2 && summary.length >= 2,
+                enabled = (isEdit || (selectedClass != null && selectedSubject != null)) &&
+                    lessonDate.trim().length == 10 && chapter.isNotBlank() && title.trim().length >= 2 && summary.trim().length >= 2,
                 modifier = Modifier.testTag("save_lesson_button")
             ) {
-                Text("Publier")
+                Text(if (isEdit) "Enregistrer" else "Publier")
             }
         },
         dismissButton = {

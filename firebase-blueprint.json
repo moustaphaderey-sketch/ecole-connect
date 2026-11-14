@@ -131,7 +131,7 @@
     },
     "School": {
       "title": "School",
-      "description": "Établissement scolaire (école primaire, collège).",
+      "description": "Établissement scolaire national de Djibouti (école primaire, collège public, lycée public).",
       "type": "object",
       "properties": {
         "name": { "type": "string" },
@@ -141,6 +141,11 @@
         "tenantId": { "type": "string", "description": "Identifiant de cloisonnement multi-locataire de l'établissement." },
         "regionName": { "type": "string" },
         "address": { "type": "string" },
+        "sector": { "type": "string", "description": "Secteur géographique ou catégorie officielle (ex: Centre-ville et Plateaux, Quartiers Sud et Ambouli, Balbala et secteurs périphériques, Collèges Publics, Lycées Publics Nationaux)." },
+        "city": { "type": "string", "description": "Ville d'implantation (ex: Djibouti-Ville)." },
+        "country": { "type": "string", "description": "Pays (Djibouti)." },
+        "description": { "type": "string", "description": "Description ou mention historique de l'établissement." },
+        "isOfficialCatalog": { "type": "boolean", "description": "Indique si le document a été initialisé depuis le référentiel officiel de Djibouti." },
         "nationalAdminUid": { "type": "string" },
         "regionalAdminUid": { "type": "string" },
         "directorUid": { "type": "string" },
@@ -545,7 +550,7 @@
     },
     "/schools/{schoolId}": {
       "schema": { "$ref": "#/entities/School" },
-      "description": "Établissements scolaires primaires et collèges."
+      "description": "Établissements scolaires de Djibouti (écoles primaires, collèges et lycées)."
     },
     "/classes/{classId}": {
       "schema": { "$ref": "#/entities/SchoolClass" },

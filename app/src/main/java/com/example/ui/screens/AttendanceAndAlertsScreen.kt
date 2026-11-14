@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Warning
@@ -25,6 +26,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -83,13 +85,31 @@ fun AttendanceAndAlertsScreen(
         observation: String,
         recommendation: String
     ) -> Unit,
-    onResolveDifficulty: (difficultyId: String, resolved: Boolean) -> Unit
+    onResolveDifficulty: (difficultyId: String, resolved: Boolean) -> Unit,
+    onUpdateAttendance: (
+        record: AttendanceRecord,
+        date: String,
+        status: String,
+        minutesLate: Int,
+        justified: Boolean,
+        reason: String
+    ) -> Unit = { _, _, _, _, _, _ -> },
+    onUpdateDifficulty: (
+        alert: DifficultyAlert,
+        category: String,
+        severity: String,
+        observation: String,
+        recommendation: String,
+        resolved: Boolean
+    ) -> Unit = { _, _, _, _, _, _ -> }
 ) {
     val role = profile.roleEnum()
     val canRecord = role == UserRole.ENSEIGNANT || role == UserRole.DIRECTEUR || role == UserRole.ADMIN_NATIONAL
     var selectedTab by remember { mutableIntStateOf(0) }
     var showAttendanceDialog by remember { mutableStateOf(false) }
     var showDifficultyDialog by remember { mutableStateOf(false) }
+    var editingAttendance by remember { mutableStateOf<AttendanceRecord?>(null) }
+    var editingDifficulty by remember { mutableStateOf<DifficultyAlert?>(null) }
 
     val activeChild = remember(students, selectedChildId) {
         students.firstOrNull { it.id == selectedChildId } ?: students.firstOrNull()
@@ -201,7 +221,12 @@ fun AttendanceAndAlertsScreen(
                     }
                 } else {
                     items(scopedAttendance, key = { it.id }) { rec ->
-                        AttendanceCard(rec)
+                        val canEditRec = canRecord && (role != UserRole.ENSEIGNANT || rec.teacherUid == profile.userId)
+                        AttendanceCard(
+                            record = rec,
+                            canEdit = canEditRec,
+                            onEdit = { editingAttendance = rec }
+                        )
                     }
                 }
             } else {
@@ -219,10 +244,13 @@ fun AttendanceAndAlertsScreen(
                     }
                 } else {
                     items(scopedDifficulties, key = { it.id }) { alert ->
+                        val canEditAlert = canRecord && (role != UserRole.ENSEIGNANT || alert.teacherUid == profile.userId)
                         DifficultyAlertCard(
                             alert = alert,
                             canResolve = canRecord,
-                            onToggleResolved = { onResolveDifficulty(alert.id, !alert.resolved) }
+                            canEdit = canEditAlert,
+                            onToggleResolved = { onResolveDifficulty(alert.id, !alert.resolved) },
+                            onEdit = { editingDifficulty = alert }
                         )
                     }
                 }
@@ -237,8 +265,23 @@ fun AttendanceAndAlertsScreen(
             students = students,
             onDismiss = { showAttendanceDialog = false },
             onSubmit = { stu, date, status, mins, justified, reason ->
-                onRecordAttendance(stu, date, status, mins, justified, reason)
+                if (stu != null) {
+                    onRecordAttendance(stu, date, status, mins, justified, reason)
+                }
                 showAttendanceDialog = false
+            }
+        )
+    }
+
+    if (editingAttendance != null) {
+        val target = editingAttendance!!
+        RecordAttendanceDialog(
+            students = students,
+            existingRecord = target,
+            onDismiss = { editingAttendance = null },
+            onSubmit = { _, date, status, mins, justified, reason ->
+                onUpdateAttendance(target, date, status, mins, justified, reason)
+                editingAttendance = null
             }
         )
     }
@@ -248,16 +291,36 @@ fun AttendanceAndAlertsScreen(
             students = students,
             subjects = subjects,
             onDismiss = { showDifficultyDialog = false },
-            onSubmit = { stu, subj, cat, sev, obs, rec ->
-                onReportDifficulty(stu, subj, cat, sev, obs, rec)
+            onSubmit = { stu, subj, cat, sev, obs, rec, _ ->
+                if (stu != null) {
+                    onReportDifficulty(stu, subj, cat, sev, obs, rec)
+                }
                 showDifficultyDialog = false
+            }
+        )
+    }
+
+    if (editingDifficulty != null) {
+        val target = editingDifficulty!!
+        ReportDifficultyDialog(
+            students = students,
+            subjects = subjects,
+            existingAlert = target,
+            onDismiss = { editingDifficulty = null },
+            onSubmit = { _, _, cat, sev, obs, rec, resolved ->
+                onUpdateDifficulty(target, cat, sev, obs, rec, resolved)
+                editingDifficulty = null
             }
         )
     }
 }
 
 @Composable
-private fun AttendanceCard(record: AttendanceRecord) {
+private fun AttendanceCard(
+    record: AttendanceRecord,
+    canEdit: Boolean,
+    onEdit: () -> Unit
+) {
     val badgeColor = when (record.status) {
         "absent" -> MaterialTheme.colorScheme.errorContainer
         "retard" -> MaterialTheme.colorScheme.secondaryContainer
@@ -289,13 +352,27 @@ private fun AttendanceCard(record: AttendanceRecord) {
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f)
                 )
-                Surface(color = badgeColor, shape = MaterialTheme.shapes.small) {
-                    Text(
-                        text = statusLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = textColor,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Surface(color = badgeColor, shape = MaterialTheme.shapes.small) {
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = textColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    if (canEdit) {
+                        IconButton(
+                            onClick = onEdit,
+                            modifier = Modifier.testTag("edit_attendance_${record.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = "Modifier l'enregistrement de présence",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
             Text(
@@ -314,7 +391,9 @@ private fun AttendanceCard(record: AttendanceRecord) {
 private fun DifficultyAlertCard(
     alert: DifficultyAlert,
     canResolve: Boolean,
-    onToggleResolved: () -> Unit
+    canEdit: Boolean,
+    onToggleResolved: () -> Unit,
+    onEdit: () -> Unit
 ) {
     val severityLabel = when (alert.severity) {
         "urgent" -> "Urgent"
@@ -349,12 +428,26 @@ private fun DifficultyAlertCard(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
-                Surface(color = severityBg, shape = MaterialTheme.shapes.small) {
-                    Text(
-                        text = if (alert.resolved) "Résolu" else severityLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Surface(color = severityBg, shape = MaterialTheme.shapes.small) {
+                        Text(
+                            text = if (alert.resolved) "Résolu" else severityLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    if (canEdit) {
+                        IconButton(
+                            onClick = onEdit,
+                            modifier = Modifier.testTag("edit_difficulty_${alert.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = "Modifier le signalement",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
             Text(alert.observation, style = MaterialTheme.typography.bodyMedium)
@@ -386,32 +479,46 @@ private fun DifficultyAlertCard(
 @Composable
 private fun RecordAttendanceDialog(
     students: List<Student>,
+    existingRecord: AttendanceRecord? = null,
     onDismiss: () -> Unit,
-    onSubmit: (Student, String, String, Int, Boolean, String) -> Unit
+    onSubmit: (Student?, String, String, Int, Boolean, String) -> Unit
 ) {
-    var selectedStudent by remember { mutableStateOf(students.firstOrNull()) }
-    var date by remember { mutableStateOf(DateUtils.todayIso()) }
-    var status by remember { mutableStateOf("absent") }
-    var minutesLateText by remember { mutableStateOf("10") }
-    var justified by remember { mutableStateOf(false) }
-    var reason by remember { mutableStateOf("") }
+    val isEdit = existingRecord != null
+    var selectedStudent by remember(existingRecord?.id) {
+        mutableStateOf(students.firstOrNull { it.id == existingRecord?.studentId } ?: students.firstOrNull())
+    }
+    var date by remember(existingRecord?.id) { mutableStateOf(existingRecord?.date ?: DateUtils.todayIso()) }
+    var status by remember(existingRecord?.id) { mutableStateOf(existingRecord?.status ?: "absent") }
+    var minutesLateText by remember(existingRecord?.id) {
+        mutableStateOf((existingRecord?.minutesLate?.takeIf { it > 0 } ?: 10).toString())
+    }
+    var justified by remember(existingRecord?.id) { mutableStateOf(existingRecord?.justified ?: false) }
+    var reason by remember(existingRecord?.id) { mutableStateOf(existingRecord?.reason ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Enregistrer présence / absence") },
+        title = { Text(if (isEdit) "Modifier présence / absence" else "Enregistrer présence / absence") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                DropdownSelector(
-                    label = "Élève",
-                    options = students,
-                    selectedOption = selectedStudent,
-                    optionLabel = { "${it.fullName} (${it.className})" },
-                    onOptionSelected = { selectedStudent = it },
-                    emptyLabel = "Aucun élève inscrit"
-                )
+                if (isEdit && existingRecord != null) {
+                    Text(
+                        text = "${existingRecord.studentName} (${existingRecord.className})",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    DropdownSelector(
+                        label = "Élève",
+                        options = students,
+                        selectedOption = selectedStudent,
+                        optionLabel = { "${it.fullName} (${it.className})" },
+                        onOptionSelected = { selectedStudent = it },
+                        emptyLabel = "Aucun élève inscrit"
+                    )
+                }
                 OutlinedTextField(
                     value = date,
                     onValueChange = { date = it },
@@ -451,18 +558,19 @@ private fun RecordAttendanceDialog(
                     value = reason,
                     onValueChange = { reason = it },
                     label = { Text("Motif / remarque") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("attendance_reason_input")
                 )
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    val stu = selectedStudent ?: return@Button
                     val mins = if (status == "retard") (minutesLateText.toIntOrNull() ?: 5).coerceIn(1, 480) else 0
-                    onSubmit(stu, date, status, mins, justified, reason)
+                    if (isEdit || selectedStudent != null) {
+                        onSubmit(selectedStudent, date, status, mins, justified, reason)
+                    }
                 },
-                enabled = selectedStudent != null && date.length == 10,
+                enabled = (isEdit || selectedStudent != null) && date.trim().length == 10,
                 modifier = Modifier.testTag("save_attendance_button")
             ) {
                 Text("Enregistrer")
@@ -478,43 +586,58 @@ private fun RecordAttendanceDialog(
 private fun ReportDifficultyDialog(
     students: List<Student>,
     subjects: List<Subject>,
+    existingAlert: DifficultyAlert? = null,
     onDismiss: () -> Unit,
-    onSubmit: (Student, Subject?, String, String, String, String) -> Unit
+    onSubmit: (Student?, Subject?, String, String, String, String, Boolean) -> Unit
 ) {
-    var selectedStudent by remember { mutableStateOf(students.firstOrNull()) }
+    val isEdit = existingAlert != null
+    var selectedStudent by remember(existingAlert?.id) {
+        mutableStateOf(students.firstOrNull { it.id == existingAlert?.studentId } ?: students.firstOrNull())
+    }
     val classSubjects = remember(subjects, selectedStudent) {
         subjects.filter { selectedStudent == null || it.classId == selectedStudent!!.classId }
     }
-    var selectedSubject by remember(classSubjects) { mutableStateOf(classSubjects.firstOrNull()) }
-    var category by remember { mutableStateOf("comprehension") }
-    var severity by remember { mutableStateOf("attention") }
-    var observation by remember { mutableStateOf("") }
-    var recommendation by remember { mutableStateOf("") }
+    var selectedSubject by remember(classSubjects, existingAlert?.id) {
+        mutableStateOf(classSubjects.firstOrNull { it.id == existingAlert?.subjectId } ?: classSubjects.firstOrNull())
+    }
+    var category by remember(existingAlert?.id) { mutableStateOf(existingAlert?.category ?: "comprehension") }
+    var severity by remember(existingAlert?.id) { mutableStateOf(existingAlert?.severity ?: "attention") }
+    var observation by remember(existingAlert?.id) { mutableStateOf(existingAlert?.observation ?: "") }
+    var recommendation by remember(existingAlert?.id) { mutableStateOf(existingAlert?.recommendation ?: "") }
+    var resolved by remember(existingAlert?.id) { mutableStateOf(existingAlert?.resolved ?: false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Signaler une difficulté scolaire") },
+        title = { Text(if (isEdit) "Modifier le signalement pédagogique" else "Signaler une difficulté scolaire") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                DropdownSelector(
-                    label = "Élève",
-                    options = students,
-                    selectedOption = selectedStudent,
-                    optionLabel = { "${it.fullName} (${it.className})" },
-                    onOptionSelected = { selectedStudent = it },
-                    emptyLabel = "Aucun élève inscrit"
-                )
-                DropdownSelector(
-                    label = "Matière (optionnel)",
-                    options = classSubjects,
-                    selectedOption = selectedSubject,
-                    optionLabel = { it.name },
-                    onOptionSelected = { selectedSubject = it },
-                    emptyLabel = "Aucune matière"
-                )
+                if (isEdit && existingAlert != null) {
+                    Text(
+                        text = "${existingAlert.studentName} (${existingAlert.className})",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    DropdownSelector(
+                        label = "Élève",
+                        options = students,
+                        selectedOption = selectedStudent,
+                        optionLabel = { "${it.fullName} (${it.className})" },
+                        onOptionSelected = { selectedStudent = it },
+                        emptyLabel = "Aucun élève inscrit"
+                    )
+                    DropdownSelector(
+                        label = "Matière (optionnel)",
+                        options = classSubjects,
+                        selectedOption = selectedSubject,
+                        optionLabel = { it.name },
+                        onOptionSelected = { selectedSubject = it },
+                        emptyLabel = "Aucune matière"
+                    )
+                }
                 DropdownSelector(
                     label = "Catégorie",
                     options = listOf("comprehension", "attention", "comportement", "assiduite", "methode", "autre"),
@@ -558,18 +681,29 @@ private fun ReportDifficultyDialog(
                     minLines = 2,
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (isEdit) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Signalement résolu")
+                        Switch(checked = resolved, onCheckedChange = { resolved = it })
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    val stu = selectedStudent ?: return@Button
-                    onSubmit(stu, selectedSubject, category, severity, observation, recommendation)
+                    if (isEdit || selectedStudent != null) {
+                        onSubmit(selectedStudent, selectedSubject, category, severity, observation, recommendation, resolved)
+                    }
                 },
-                enabled = selectedStudent != null && observation.trim().length >= 3,
+                enabled = (isEdit || selectedStudent != null) && observation.trim().length >= 3,
                 modifier = Modifier.testTag("save_difficulty_button")
             ) {
-                Text("Transmettre")
+                Text(if (isEdit) "Enregistrer" else "Transmettre")
             }
         },
         dismissButton = {

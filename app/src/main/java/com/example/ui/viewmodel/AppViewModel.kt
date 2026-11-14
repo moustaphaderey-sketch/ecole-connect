@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -65,7 +66,8 @@ enum class AppSection(val labelFr: String) {
     PRESENCES_ET_ALERTES("Présences & Alertes"),
     ADMINISTRATION("Établissements & Classes"),
     MESSAGERIE("Messagerie & Annonces"),
-    NOTIFICATIONS("Notifications & Audit")
+    NOTIFICATIONS("Notifications & Audit"),
+    A_PROPOS("À propos de nous")
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -85,6 +87,9 @@ class AppViewModel(
     private val _selectedSection = MutableStateFlow(AppSection.TABLEAU_DE_BORD)
     val selectedSection: StateFlow<AppSection> = _selectedSection.asStateFlow()
 
+    private val _targetAdminTabName = MutableStateFlow<String?>(null)
+    val targetAdminTabName: StateFlow<String?> = _targetAdminTabName.asStateFlow()
+
     private val _selectedChildId = MutableStateFlow<String?>(null)
     val selectedChildId: StateFlow<String?> = _selectedChildId.asStateFlow()
 
@@ -98,7 +103,16 @@ class AppViewModel(
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
     private val _onboardingBootstrapAvailable = MutableStateFlow(false)
-    private val _pendingInvitation = MutableStateFlow<RoleInvitation?>(null)
+    private val _invitationRefreshTrigger = MutableStateFlow(0)
+
+    private val observedPendingInvitation: Flow<RoleInvitation?> = _invitationRefreshTrigger.flatMapLatest {
+        if (currentUserEmail.isBlank()) {
+            flowOf(null)
+        } else {
+            authRepo.observePendingInvitationForEmail(currentUserEmail)
+                .onStart { emit(authRepo.findPendingInvitationForEmail(currentUserEmail)) }
+        }
+    }
 
     init {
         refreshOnboardingChecks()
@@ -107,9 +121,7 @@ class AppViewModel(
     fun refreshOnboardingChecks() {
         viewModelScope.launch {
             _onboardingBootstrapAvailable.value = authRepo.isBootstrapAvailable()
-            if (currentUserEmail.isNotBlank()) {
-                _pendingInvitation.value = authRepo.findPendingInvitationForEmail(currentUserEmail)
-            }
+            _invitationRefreshTrigger.value = _invitationRefreshTrigger.value + 1
         }
     }
 
@@ -158,7 +170,7 @@ class AppViewModel(
         privateContact,
         accessRequest,
         _onboardingBootstrapAvailable,
-        _pendingInvitation
+        observedPendingInvitation
     ) { profileResult, contact, req, canBootstrap, invitation ->
         if (profileResult.isFailure) {
             val err = profileResult.exceptionOrNull()
@@ -214,6 +226,20 @@ class AppViewModel(
 
     fun selectSection(section: AppSection) {
         _selectedSection.value = section
+    }
+
+    fun openAdminApprovals() {
+        _targetAdminTabName.value = "Comptes & Invitations"
+        _selectedSection.value = AppSection.ADMINISTRATION
+    }
+
+    fun openDirectorSchoolSetup() {
+        _targetAdminTabName.value = "Mon établissement"
+        _selectedSection.value = AppSection.ADMINISTRATION
+    }
+
+    fun consumeTargetAdminTab() {
+        _targetAdminTabName.value = null
     }
 
     fun selectChild(studentId: String?) {
@@ -313,6 +339,47 @@ class AppViewModel(
         val actor = userProfile.value ?: return
         runAction("Établissement « $name » enregistré.") {
             adminRepo.createSchool(actor, region, name, code, schoolType, address)
+        }
+    }
+
+    fun setupDirectorSchool(
+        region: Region?,
+        name: String,
+        code: String,
+        schoolType: String,
+        address: String,
+        officialSchoolId: String = ""
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Établissement « $name » configuré pour votre direction.") {
+            adminRepo.createOrClaimSchoolForDirector(
+                actor = actor,
+                region = region,
+                name = name,
+                code = code,
+                schoolType = schoolType,
+                address = address,
+                officialSchoolId = officialSchoolId
+            )
+        }
+    }
+
+    fun importOfficialDjiboutiSchools() {
+        val actor = userProfile.value ?: return
+        viewModelScope.launch {
+            _isBusy.value = true
+            _errorMessage.value = null
+            val res = adminRepo.importOfficialDjiboutiSchools(actor, regions.value, schools.value)
+            _isBusy.value = false
+            res.onSuccess { count ->
+                _feedbackMessage.value = if (count > 0) {
+                    "$count établissement(s) officiel(s) de Djibouti-Ville importé(s)."
+                } else {
+                    "Tous les établissements officiels de Djibouti-Ville sont déjà enregistrés."
+                }
+            }.onFailure { err ->
+                _errorMessage.value = err.localizedMessage ?: "Erreur lors de l'import des établissements."
+            }
         }
     }
 
@@ -560,5 +627,202 @@ class AppViewModel(
 
     fun markNotificationRead(notificationId: String) {
         viewModelScope.launch { commRepo.markNotificationRead(notificationId) }
+    }
+
+    fun updateRegion(region: Region, name: String, code: String) {
+        val actor = userProfile.value ?: return
+        runAction("Région « $name » mise à jour.") {
+            adminRepo.updateRegion(actor, region, name, code)
+        }
+    }
+
+    fun updateSchool(
+        school: School,
+        region: Region?,
+        name: String,
+        code: String,
+        schoolType: String,
+        address: String,
+        sector: String,
+        description: String,
+        isActive: Boolean
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Établissement « $name » mis à jour.") {
+            adminRepo.updateSchool(actor, school, region, name, code, schoolType, address, sector, description, isActive)
+        }
+    }
+
+    fun updateClass(schoolClass: SchoolClass, name: String, level: String, academicYear: String) {
+        val actor = userProfile.value ?: return
+        runAction("Classe « $name » mise à jour.") {
+            adminRepo.updateClass(actor, schoolClass, name, level, academicYear)
+        }
+    }
+
+    fun updateSubject(
+        subject: Subject,
+        name: String,
+        code: String,
+        coefficient: Double,
+        teacherUid: String,
+        teacherName: String
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Matière « $name » mise à jour.") {
+            adminRepo.updateSubject(actor, subject, name, code, coefficient, teacherUid, teacherName)
+        }
+    }
+
+    fun updateScheduleEntry(
+        entry: ScheduleEntry,
+        subject: Subject?,
+        dayOfWeek: String,
+        startTime: String,
+        endTime: String,
+        room: String
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Créneau d'emploi du temps mis à jour.") {
+            adminRepo.updateScheduleEntry(actor, entry, subject, dayOfWeek, startTime, endTime, room)
+        }
+    }
+
+    fun updateStudent(
+        student: Student,
+        targetClass: SchoolClass?,
+        firstName: String,
+        lastName: String,
+        matricule: String,
+        dateOfBirth: String,
+        gender: String,
+        gradesVisibleToStudent: Boolean,
+        isActive: Boolean
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Fiche élève de $firstName $lastName mise à jour.") {
+            adminRepo.updateStudent(
+                actor, student, targetClass, firstName, lastName, matricule,
+                dateOfBirth, gender, gradesVisibleToStudent, isActive
+            )
+        }
+    }
+
+    fun updateRoleInvitation(invitation: RoleInvitation, fullName: String, phone: String, status: String) {
+        val actor = userProfile.value ?: return
+        runAction("Invitation mise à jour.") {
+            adminRepo.updateRoleInvitation(actor, invitation, fullName, phone, status)
+        }
+    }
+
+    fun updateManagedUser(
+        targetUser: UserProfile,
+        fullName: String,
+        role: UserRole?,
+        school: School?,
+        isActive: Boolean
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Compte de $fullName mis à jour.") {
+            adminRepo.updateManagedUser(actor, targetUser, fullName, role, school, isActive)
+        }
+    }
+
+    fun updateLesson(
+        lesson: LessonEntry,
+        lessonDate: String,
+        chapter: String,
+        title: String,
+        summary: String,
+        skillsWorked: String,
+        classExercises: String,
+        homework: String,
+        homeworkDueDate: String,
+        attachmentLabel: String
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Leçon « $title » mise à jour.") {
+            academicRepo.updateLesson(
+                actor, lesson, lessonDate, chapter, title, summary,
+                skillsWorked, classExercises, homework, homeworkDueDate, attachmentLabel
+            )
+        }
+    }
+
+    fun updateAssessment(
+        grade: AssessmentGrade,
+        title: String,
+        assessmentType: String,
+        score: Double,
+        maxScore: Double,
+        coefficient: Double,
+        period: String,
+        date: String,
+        comment: String
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Note « $title » mise à jour.") {
+            academicRepo.updateAssessment(actor, grade, title, assessmentType, score, maxScore, coefficient, period, date, comment)
+        }
+    }
+
+    fun updateAttendance(
+        record: AttendanceRecord,
+        date: String,
+        status: String,
+        minutesLate: Int,
+        justified: Boolean,
+        reason: String
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Enregistrement de présence mis à jour.") {
+            academicRepo.updateAttendance(actor, record, date, status, minutesLate, justified, reason)
+        }
+    }
+
+    fun updateDifficulty(
+        alert: DifficultyAlert,
+        category: String,
+        severity: String,
+        observation: String,
+        recommendation: String,
+        resolved: Boolean
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Signalement pédagogique mis à jour.") {
+            academicRepo.updateDifficulty(actor, alert, category, severity, observation, recommendation, resolved)
+        }
+    }
+
+    fun updateReportCard(
+        reportCard: ReportCard,
+        overallAverage: Double,
+        classAverage: Double,
+        rankLabel: String,
+        absencesCount: Int,
+        tardiesCount: Int,
+        councilDecision: String,
+        directorObservation: String,
+        published: Boolean
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Bulletin de ${reportCard.studentName} mis à jour.") {
+            academicRepo.updateReportCard(
+                actor, reportCard, overallAverage, classAverage, rankLabel,
+                absencesCount, tardiesCount, councilDecision, directorObservation, published
+            )
+        }
+    }
+
+    fun updateAnnouncement(
+        announcement: Announcement,
+        title: String,
+        content: String,
+        priority: String
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Annonce « $title » mise à jour.") {
+            commRepo.updateAnnouncement(actor, announcement, title, content, priority)
+        }
     }
 }

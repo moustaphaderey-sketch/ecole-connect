@@ -20,12 +20,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -100,7 +102,29 @@ fun GradesAndBulletinsScreen(
         councilDecision: String,
         directorObservation: String,
         published: Boolean
-    ) -> Unit
+    ) -> Unit,
+    onUpdateAssessment: (
+        grade: AssessmentGrade,
+        title: String,
+        assessmentType: String,
+        score: Double,
+        maxScore: Double,
+        coefficient: Double,
+        period: String,
+        date: String,
+        comment: String
+    ) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onUpdateReportCard: (
+        reportCard: ReportCard,
+        overallAverage: Double,
+        classAverage: Double,
+        rankLabel: String,
+        absencesCount: Int,
+        tardiesCount: Int,
+        councilDecision: String,
+        directorObservation: String,
+        published: Boolean
+    ) -> Unit = { _, _, _, _, _, _, _, _, _ -> }
 ) {
     val context = LocalContext.current
     val role = profile.roleEnum()
@@ -111,6 +135,8 @@ fun GradesAndBulletinsScreen(
     var selectedPeriod by remember { mutableStateOf("Trimestre 1") }
     var showGradeDialog by remember { mutableStateOf(false) }
     var showBulletinDialog by remember { mutableStateOf(false) }
+    var editingGrade by remember { mutableStateOf<AssessmentGrade?>(null) }
+    var editingBulletin by remember { mutableStateOf<ReportCard?>(null) }
 
     val activeChild = remember(students, selectedChildId) {
         students.firstOrNull { it.id == selectedChildId } ?: students.firstOrNull()
@@ -301,6 +327,7 @@ fun GradesAndBulletinsScreen(
                         }
                     } else {
                         items(scopedGrades, key = { it.id }) { grade ->
+                            val canEditGrade = canAddGrade && (role != UserRole.ENSEIGNANT || grade.teacherUid == profile.userId)
                             ElevatedCard {
                                 Column(
                                     modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -308,19 +335,34 @@ fun GradesAndBulletinsScreen(
                                 ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
                                             "${grade.subjectName} — ${grade.title}",
                                             style = MaterialTheme.typography.titleMedium,
                                             modifier = Modifier.weight(1f)
                                         )
-                                        Text(
-                                            "${grade.score} / ${grade.maxScore}",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                "${grade.score} / ${grade.maxScore}",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            if (canEditGrade) {
+                                                IconButton(
+                                                    onClick = { editingGrade = grade },
+                                                    modifier = Modifier.testTag("edit_grade_${grade.id}")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Edit,
+                                                        contentDescription = "Modifier la note",
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                     Text(
                                         "${grade.studentName} • ${grade.assessmentType} (coeff. ${grade.coefficient}) • ${DateUtils.formatFrenchShort(grade.date)}",
@@ -413,16 +455,30 @@ fun GradesAndBulletinsScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Column {
+                                        Column(modifier = Modifier.weight(1f)) {
                                             Text(bulletin.studentName, style = MaterialTheme.typography.titleLarge)
                                             Text("${bulletin.className} • ${bulletin.period}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                                         }
-                                        Text(
-                                            String.format(Locale.FRANCE, "%.2f / 20", bulletin.overallAverage),
-                                            style = MaterialTheme.typography.headlineSmall,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                String.format(Locale.FRANCE, "%.2f / 20", bulletin.overallAverage),
+                                                style = MaterialTheme.typography.headlineSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            if (canGenerateBulletin) {
+                                                IconButton(
+                                                    onClick = { editingBulletin = bulletin },
+                                                    modifier = Modifier.testTag("edit_bulletin_${bulletin.id}")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Edit,
+                                                        contentDescription = "Modifier le bulletin",
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                     Text(
                                         "Moyenne classe : ${String.format(Locale.FRANCE, "%.2f", bulletin.classAverage)}/20 • Absences : ${bulletin.absencesCount} • Retards : ${bulletin.tardiesCount}",
@@ -466,8 +522,24 @@ fun GradesAndBulletinsScreen(
             subjects = subjects,
             onDismiss = { showGradeDialog = false },
             onSubmit = { stu, subj, title, type, score, maxScore, coeff, period, date, comment ->
-                onRecordAssessment(stu, subj, title, type, score, maxScore, coeff, period, date, comment)
+                if (stu != null && subj != null) {
+                    onRecordAssessment(stu, subj, title, type, score, maxScore, coeff, period, date, comment)
+                }
                 showGradeDialog = false
+            }
+        )
+    }
+
+    if (editingGrade != null) {
+        val target = editingGrade!!
+        RecordGradeDialog(
+            students = students,
+            subjects = subjects,
+            existingGrade = target,
+            onDismiss = { editingGrade = null },
+            onSubmit = { _, _, title, type, score, maxScore, coeff, period, date, comment ->
+                onUpdateAssessment(target, title, type, score, maxScore, coeff, period, date, comment)
+                editingGrade = null
             }
         )
     }
@@ -481,8 +553,27 @@ fun GradesAndBulletinsScreen(
             attendance = attendance,
             onDismiss = { showBulletinDialog = false },
             onSubmit = { school, stu, period, avg, classAvg, rank, abs, tardies, decision, obs, pub ->
-                onGenerateReportCard(school, stu, period, avg, classAvg, rank, abs, tardies, decision, obs, pub)
+                if (stu != null) {
+                    onGenerateReportCard(school, stu, period, avg, classAvg, rank, abs, tardies, decision, obs, pub)
+                }
                 showBulletinDialog = false
+            }
+        )
+    }
+
+    if (editingBulletin != null) {
+        val target = editingBulletin!!
+        GenerateBulletinDialog(
+            schools = schools,
+            students = students,
+            subjects = subjects,
+            assessments = assessments,
+            attendance = attendance,
+            existingBulletin = target,
+            onDismiss = { editingBulletin = null },
+            onSubmit = { _, _, _, avg, classAvg, rank, abs, tardies, decision, obs, pub ->
+                onUpdateReportCard(target, avg, classAvg, rank, abs, tardies, decision, obs, pub)
+                editingBulletin = null
             }
         )
     }
@@ -492,48 +583,67 @@ fun GradesAndBulletinsScreen(
 private fun RecordGradeDialog(
     students: List<Student>,
     subjects: List<Subject>,
+    existingGrade: AssessmentGrade? = null,
     onDismiss: () -> Unit,
-    onSubmit: (Student, Subject, String, String, Double, Double, Double, String, String, String) -> Unit
+    onSubmit: (Student?, Subject?, String, String, Double, Double, Double, String, String, String) -> Unit
 ) {
-    var selectedStudent by remember { mutableStateOf(students.firstOrNull()) }
+    val isEdit = existingGrade != null
+    var selectedStudent by remember(existingGrade?.id) {
+        mutableStateOf(students.firstOrNull { it.id == existingGrade?.studentId } ?: students.firstOrNull())
+    }
     val stuSubjects = remember(subjects, selectedStudent) {
         subjects.filter { selectedStudent == null || it.classId == selectedStudent!!.classId }
     }
-    var selectedSubject by remember(stuSubjects) { mutableStateOf(stuSubjects.firstOrNull()) }
-    var title by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf("devoir") }
-    var scoreText by remember { mutableStateOf("") }
-    var maxScoreText by remember { mutableStateOf("20") }
-    var coeffText by remember { mutableStateOf("1") }
-    var period by remember { mutableStateOf("Trimestre 1") }
-    var date by remember { mutableStateOf(DateUtils.todayIso()) }
-    var comment by remember { mutableStateOf("") }
+    var selectedSubject by remember(stuSubjects, existingGrade?.id) {
+        mutableStateOf(stuSubjects.firstOrNull { it.id == existingGrade?.subjectId } ?: stuSubjects.firstOrNull())
+    }
+    var title by remember(existingGrade?.id) { mutableStateOf(existingGrade?.title ?: "") }
+    var type by remember(existingGrade?.id) { mutableStateOf(existingGrade?.assessmentType ?: "devoir") }
+    var scoreText by remember(existingGrade?.id) { mutableStateOf(existingGrade?.score?.toString() ?: "") }
+    var maxScoreText by remember(existingGrade?.id) { mutableStateOf(existingGrade?.maxScore?.toString() ?: "20") }
+    var coeffText by remember(existingGrade?.id) { mutableStateOf(existingGrade?.coefficient?.toString() ?: "1") }
+    var period by remember(existingGrade?.id) { mutableStateOf(existingGrade?.period ?: "Trimestre 1") }
+    var date by remember(existingGrade?.id) { mutableStateOf(existingGrade?.date ?: DateUtils.todayIso()) }
+    var comment by remember(existingGrade?.id) { mutableStateOf(existingGrade?.comment ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Saisir une note d'évaluation") },
+        title = { Text(if (isEdit) "Modifier la note d'évaluation" else "Saisir une note d'évaluation") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                DropdownSelector(
-                    label = "Élève",
-                    options = students,
-                    selectedOption = selectedStudent,
-                    optionLabel = { "${it.fullName} (${it.className})" },
-                    onOptionSelected = { selectedStudent = it },
-                    emptyLabel = "Aucun élève inscrit"
+                if (isEdit && existingGrade != null) {
+                    Text(
+                        text = "${existingGrade.studentName} • ${existingGrade.subjectName}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    DropdownSelector(
+                        label = "Élève",
+                        options = students,
+                        selectedOption = selectedStudent,
+                        optionLabel = { "${it.fullName} (${it.className})" },
+                        onOptionSelected = { selectedStudent = it },
+                        emptyLabel = "Aucun élève inscrit"
+                    )
+                    DropdownSelector(
+                        label = "Matière",
+                        options = stuSubjects,
+                        selectedOption = selectedSubject,
+                        optionLabel = { it.name },
+                        onOptionSelected = { selectedSubject = it },
+                        emptyLabel = "Aucune matière"
+                    )
+                }
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Intitulé de l'évaluation *") },
+                    modifier = Modifier.fillMaxWidth().testTag("grade_title_input")
                 )
-                DropdownSelector(
-                    label = "Matière",
-                    options = stuSubjects,
-                    selectedOption = selectedSubject,
-                    optionLabel = { it.name },
-                    onOptionSelected = { selectedSubject = it },
-                    emptyLabel = "Aucune matière"
-                )
-                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Intitulé de l'évaluation *") }, modifier = Modifier.fillMaxWidth())
                 DropdownSelector(
                     label = "Type",
                     options = listOf("devoir", "interrogation", "composition", "oral"),
@@ -542,7 +652,12 @@ private fun RecordGradeDialog(
                     onOptionSelected = { type = it }
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = scoreText, onValueChange = { scoreText = it }, label = { Text("Note *") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(
+                        value = scoreText,
+                        onValueChange = { scoreText = it },
+                        label = { Text("Note *") },
+                        modifier = Modifier.weight(1f).testTag("grade_score_input")
+                    )
                     OutlinedTextField(value = maxScoreText, onValueChange = { maxScoreText = it }, label = { Text("Sur") }, modifier = Modifier.weight(1f))
                     OutlinedTextField(value = coeffText, onValueChange = { coeffText = it }, label = { Text("Coeff.") }, modifier = Modifier.weight(1f))
                 }
@@ -563,14 +678,13 @@ private fun RecordGradeDialog(
             val coeff = coeffText.replace(",", ".").toDoubleOrNull() ?: 1.0
             Button(
                 onClick = {
-                    val stu = selectedStudent ?: return@Button
-                    val subj = selectedSubject ?: return@Button
-                    if (score != null) {
-                        onSubmit(stu, subj, title, type, score, maxScore, coeff, period, date, comment)
+                    if ((isEdit || (selectedStudent != null && selectedSubject != null)) && score != null) {
+                        onSubmit(selectedStudent, selectedSubject, title, type, score, maxScore, coeff, period, date, comment)
                     }
                 },
-                enabled = selectedStudent != null && selectedSubject != null && title.isNotBlank() &&
-                    score != null && score >= 0.0 && score <= maxScore && date.length == 10
+                enabled = (isEdit || (selectedStudent != null && selectedSubject != null)) && title.isNotBlank() &&
+                    score != null && score >= 0.0 && score <= maxScore && maxScore >= 1.0 && coeff in 0.5..20.0 && date.trim().length == 10,
+                modifier = Modifier.testTag("save_grade_button")
             ) {
                 Text("Enregistrer")
             }
@@ -588,11 +702,15 @@ private fun GenerateBulletinDialog(
     subjects: List<Subject>,
     assessments: List<AssessmentGrade>,
     attendance: List<AttendanceRecord>,
+    existingBulletin: ReportCard? = null,
     onDismiss: () -> Unit,
-    onSubmit: (School?, Student, String, Double, Double, String, Int, Int, String, String, Boolean) -> Unit
+    onSubmit: (School?, Student?, String, Double, Double, String, Int, Int, String, String, Boolean) -> Unit
 ) {
-    var selectedStudent by remember { mutableStateOf(students.firstOrNull()) }
-    var period by remember { mutableStateOf("Trimestre 1") }
+    val isEdit = existingBulletin != null
+    var selectedStudent by remember(existingBulletin?.id) {
+        mutableStateOf(students.firstOrNull { it.id == existingBulletin?.studentId } ?: students.firstOrNull())
+    }
+    var period by remember(existingBulletin?.id) { mutableStateOf(existingBulletin?.period ?: "Trimestre 1") }
 
     val stuGrades = remember(assessments, selectedStudent, period) {
         assessments.filter { it.studentId == selectedStudent?.id && it.period == period }
@@ -613,44 +731,92 @@ private fun GenerateBulletinDialog(
         attendance.count { it.studentId == selectedStudent?.id && it.status == "retard" }
     }
 
-    var rankLabel by remember { mutableStateOf("") }
-    var decision by remember { mutableStateOf("Encouragements") }
-    var observation by remember { mutableStateOf("") }
-    var publishNow by remember { mutableStateOf(true) }
+    var overallAvgText by remember(existingBulletin?.id) {
+        mutableStateOf(existingBulletin?.overallAverage?.toString() ?: "")
+    }
+    var classAvgText by remember(existingBulletin?.id) {
+        mutableStateOf(existingBulletin?.classAverage?.toString() ?: "")
+    }
+    var absencesText by remember(existingBulletin?.id) {
+        mutableStateOf(existingBulletin?.absencesCount?.toString() ?: "")
+    }
+    var tardiesText by remember(existingBulletin?.id) {
+        mutableStateOf(existingBulletin?.tardiesCount?.toString() ?: "")
+    }
+    var rankLabel by remember(existingBulletin?.id) { mutableStateOf(existingBulletin?.rankLabel ?: "") }
+    var decision by remember(existingBulletin?.id) { mutableStateOf(existingBulletin?.councilDecision ?: "Encouragements") }
+    var observation by remember(existingBulletin?.id) { mutableStateOf(existingBulletin?.directorObservation ?: "") }
+    var publishNow by remember(existingBulletin?.id) { mutableStateOf(existingBulletin?.published ?: true) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Générer un bulletin scolaire") },
+        title = { Text(if (isEdit) "Modifier le bulletin scolaire" else "Générer un bulletin scolaire") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                DropdownSelector(
-                    label = "Élève",
-                    options = students,
-                    selectedOption = selectedStudent,
-                    optionLabel = { "${it.fullName} (${it.className})" },
-                    onOptionSelected = { selectedStudent = it },
-                    emptyLabel = "Aucun élève"
-                )
-                DropdownSelector(
-                    label = "Période",
-                    options = listOf("Trimestre 1", "Trimestre 2", "Trimestre 3"),
-                    selectedOption = period,
-                    optionLabel = { it },
-                    onOptionSelected = { period = it }
-                )
-                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
-                        Text(
-                            "Moyenne calculée : ${String.format(Locale.FRANCE, "%.2f / 20", computedAvg)}",
-                            style = MaterialTheme.typography.labelLarge
+                if (isEdit && existingBulletin != null) {
+                    Text(
+                        text = "${existingBulletin.studentName} • ${existingBulletin.className} • ${existingBulletin.period}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = overallAvgText,
+                            onValueChange = { overallAvgText = it },
+                            label = { Text("Moyenne /20 *") },
+                            modifier = Modifier.weight(1f).testTag("bulletin_overall_avg_input")
                         )
-                        Text(
-                            "Moyenne classe : ${String.format(Locale.FRANCE, "%.2f / 20", computedClassAvg)} • Absences : $absCount • Retards : $tardyCount",
-                            style = MaterialTheme.typography.bodySmall
+                        OutlinedTextField(
+                            value = classAvgText,
+                            onValueChange = { classAvgText = it },
+                            label = { Text("Moy. classe") },
+                            modifier = Modifier.weight(1f)
                         )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = absencesText,
+                            onValueChange = { absencesText = it },
+                            label = { Text("Absences") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = tardiesText,
+                            onValueChange = { tardiesText = it },
+                            label = { Text("Retards") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                } else {
+                    DropdownSelector(
+                        label = "Élève",
+                        options = students,
+                        selectedOption = selectedStudent,
+                        optionLabel = { "${it.fullName} (${it.className})" },
+                        onOptionSelected = { selectedStudent = it },
+                        emptyLabel = "Aucun élève"
+                    )
+                    DropdownSelector(
+                        label = "Période",
+                        options = listOf("Trimestre 1", "Trimestre 2", "Trimestre 3"),
+                        selectedOption = period,
+                        optionLabel = { it },
+                        onOptionSelected = { period = it }
+                    )
+                    Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
+                            Text(
+                                "Moyenne calculée : ${String.format(Locale.FRANCE, "%.2f / 20", computedAvg)}",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            Text(
+                                "Moyenne classe : ${String.format(Locale.FRANCE, "%.2f / 20", computedClassAvg)} • Absences : $absCount • Retards : $tardyCount",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     }
                 }
                 OutlinedTextField(value = rankLabel, onValueChange = { rankLabel = it }, label = { Text("Rang (ex: 3e / 32)") }, modifier = Modifier.fillMaxWidth())
@@ -661,21 +827,40 @@ private fun GenerateBulletinDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Publier aux parents immédiatement")
+                    Text(if (isEdit) "Publié aux parents" else "Publier aux parents immédiatement")
                     Switch(checked = publishNow, onCheckedChange = { publishNow = it })
                 }
             }
         },
         confirmButton = {
+            val parsedOverall = if (isEdit) overallAvgText.replace(",", ".").toDoubleOrNull() else computedAvg
+            val parsedClassAvg = if (isEdit) (classAvgText.replace(",", ".").toDoubleOrNull() ?: 0.0) else computedClassAvg
+            val parsedAbs = if (isEdit) (absencesText.toIntOrNull() ?: 0) else absCount
+            val parsedTardies = if (isEdit) (tardiesText.toIntOrNull() ?: 0) else tardyCount
             Button(
                 onClick = {
-                    val stu = selectedStudent ?: return@Button
-                    val school = schools.firstOrNull { it.id == stu.schoolId }
-                    onSubmit(school, stu, period, computedAvg, computedClassAvg, rankLabel, absCount, tardyCount, decision, observation, publishNow)
+                    val stu = selectedStudent
+                    if ((isEdit || stu != null) && parsedOverall != null) {
+                        val school = stu?.let { s -> schools.firstOrNull { it.id == s.schoolId } }
+                        onSubmit(
+                            school,
+                            stu,
+                            period,
+                            parsedOverall,
+                            parsedClassAvg,
+                            rankLabel,
+                            parsedAbs,
+                            parsedTardies,
+                            decision,
+                            observation,
+                            publishNow
+                        )
+                    }
                 },
-                enabled = selectedStudent != null
+                enabled = (isEdit || selectedStudent != null) && parsedOverall != null && parsedOverall in 0.0..20.0,
+                modifier = Modifier.testTag("save_bulletin_button")
             ) {
-                Text("Générer")
+                Text(if (isEdit) "Enregistrer" else "Générer")
             }
         },
         dismissButton = {

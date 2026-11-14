@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import com.example.data.catalog.DjiboutiSchoolsCatalog
 import com.example.data.model.AccessRequest
 import com.example.data.model.AuditLog
 import com.example.data.model.Region
@@ -11,6 +12,7 @@ import com.example.data.model.Student
 import com.example.data.model.Subject
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
+import com.example.data.seed.DjiboutiSchoolsSeeder
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -64,11 +66,36 @@ class AdminRepository(
         }
     }
 
-    fun observeRegions(profile: UserProfile): Flow<List<Region>> =
-        observeCollection("regions", scopedQuery("regions", profile), profile.userId)
+    fun observeRegions(profile: UserProfile): Flow<List<Region>> {
+        val base = db.collection("regions")
+        val uid = profile.userId
+        val query = when (profile.roleEnum()) {
+            UserRole.ADMIN_NATIONAL -> base.whereEqualTo("nationalAdminUid", profile.nationalAdminUid.ifBlank { uid })
+            UserRole.ADMIN_REGIONAL -> base.whereEqualTo("regionalAdminUid", uid)
+            else -> base
+        }
+        return observeCollection("regions", query, uid)
+    }
 
-    fun observeSchools(profile: UserProfile): Flow<List<School>> =
-        observeCollection("schools", scopedQuery("schools", profile), profile.userId)
+    fun observeSchools(profile: UserProfile): Flow<List<School>> {
+        if (profile.roleEnum() == UserRole.DIRECTEUR && profile.schoolId.isNotBlank()) {
+            val byDirector: Flow<List<School>> = observeCollection(
+                "schools",
+                db.collection("schools").whereEqualTo("directorUid", profile.userId),
+                profile.userId
+            )
+            val byTenant: Flow<List<School>> = observeCollection<School>(
+                "schools",
+                db.collection("schools").whereEqualTo("tenantId", profile.schoolId),
+                profile.userId
+            ).catch { emit(emptyList()) }
+
+            return kotlinx.coroutines.flow.combine(byDirector, byTenant) { primary, fallback ->
+                (primary + fallback).distinctBy { it.id }
+            }
+        }
+        return observeCollection("schools", scopedQuery("schools", profile), profile.userId)
+    }
 
     fun observeClasses(profile: UserProfile): Flow<List<SchoolClass>> =
         observeCollection("classes", scopedQuery("classes", profile), profile.userId)
@@ -174,6 +201,9 @@ class AdminRepository(
             "tenantId" to docId,
             "regionName" to region.name,
             "address" to address.trim(),
+            "city" to if (region.name.contains("Djibouti", ignoreCase = true)) "Djibouti-Ville" else region.name,
+            "country" to "Djibouti",
+            "isOfficialCatalog" to false,
             "nationalAdminUid" to natUid,
             "authorizedUids" to authUids,
             "isActive" to true,
@@ -187,6 +217,160 @@ class AdminRepository(
         docId
     }.onFailure {
         handleFirestoreError(it, OperationType.CREATE, "schools", auth)
+    }
+
+    suspend fun createOrClaimSchoolForDirector(
+        actor: UserProfile,
+        region: Region?,
+        name: String,
+        code: String,
+        schoolType: String,
+        address: String,
+        officialSchoolId: String = ""
+    ): Result<String> = runCatching {
+        val natUid = region?.nationalAdminUid?.ifBlank { actor.nationalAdminUid } ?: actor.nationalAdminUid
+        val targetRegion: Region = if (region != null) {
+            region
+        } else {
+            val regionDocId = DjiboutiSchoolsCatalog.REGION_ID
+            val regionRef = db.collection("regions").document(regionDocId)
+            val snap = regionRef.get().await()
+            if (!snap.exists()) {
+                regionRef.set(
+                    mapOf(
+                        "name" to DjiboutiSchoolsCatalog.REGION_NAME,
+                        "code" to DjiboutiSchoolsCatalog.REGION_CODE,
+                        "nationalAdminUid" to natUid,
+                        "createdByUid" to actor.userId,
+                        "authorizedUids" to listOfNotNull(actor.userId, natUid.takeIf { it.isNotBlank() }).distinct(),
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                Region(
+                    id = regionDocId,
+                    name = DjiboutiSchoolsCatalog.REGION_NAME,
+                    code = DjiboutiSchoolsCatalog.REGION_CODE,
+                    nationalAdminUid = natUid,
+                    createdByUid = actor.userId
+                )
+            } else {
+                snap.toObject(Region::class.java) ?: Region(
+                    id = regionDocId,
+                    name = DjiboutiSchoolsCatalog.REGION_NAME,
+                    code = DjiboutiSchoolsCatalog.REGION_CODE,
+                    nationalAdminUid = natUid
+                )
+            }
+        }
+
+        val cleanName = name.trim()
+        val cleanCode = code.trim().uppercase()
+        val cleanAddress = address.trim()
+        val targetSchoolId = officialSchoolId.trim().ifBlank { UUID.randomUUID().toString() }
+        val schoolRef = db.collection("schools").document(targetSchoolId)
+        val existingSchoolSnap = runCatching { schoolRef.get().await() }.getOrNull()
+
+        var resolvedSchoolName = cleanName
+        var resolvedRegionId = targetRegion.id
+
+        if (existingSchoolSnap != null && existingSchoolSnap.exists()) {
+            val existingDirUid = existingSchoolSnap.getString("directorUid").orEmpty()
+            require(existingDirUid.isBlank() || existingDirUid == actor.userId) {
+                "Cet établissement possède déjà un directeur affecté."
+            }
+            resolvedSchoolName = existingSchoolSnap.getString("name").orEmpty().ifBlank { cleanName }
+            resolvedRegionId = existingSchoolSnap.getString("regionId").orEmpty().ifBlank { targetRegion.id }
+            schoolRef.update(
+                mapOf(
+                    "directorUid" to actor.userId,
+                    "directorName" to actor.fullName,
+                    "authorizedUids" to FieldValue.arrayUnion(actor.userId),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } else {
+            val authUids = listOfNotNull(
+                actor.userId,
+                natUid.takeIf { it.isNotBlank() },
+                targetRegion.regionalAdminUid.takeIf { it.isNotBlank() }
+            ).distinct()
+            val catalogMatch = DjiboutiSchoolsCatalog.allSchools.firstOrNull { it.id == targetSchoolId }
+            val payload = mutableMapOf<String, Any>(
+                "name" to cleanName,
+                "code" to cleanCode,
+                "schoolType" to schoolType,
+                "regionId" to targetRegion.id,
+                "tenantId" to targetSchoolId,
+                "regionName" to targetRegion.name,
+                "address" to cleanAddress,
+                "city" to "Djibouti-Ville",
+                "country" to "Djibouti",
+                "isOfficialCatalog" to (catalogMatch != null),
+                "nationalAdminUid" to natUid,
+                "directorUid" to actor.userId,
+                "directorName" to actor.fullName,
+                "authorizedUids" to authUids,
+                "isActive" to true,
+                "createdByUid" to actor.userId,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (catalogMatch != null) {
+                if (catalogMatch.sector.isNotBlank()) payload["sector"] = catalogMatch.sector.take(120)
+                if (catalogMatch.description.isNotBlank()) payload["description"] = catalogMatch.description.take(300)
+            }
+            if (targetRegion.regionalAdminUid.isNotBlank()) {
+                payload["regionalAdminUid"] = targetRegion.regionalAdminUid
+            }
+            schoolRef.set(payload).await()
+        }
+
+        if (actor.schoolId.isBlank()) {
+            db.collection("users").document(actor.userId).update(
+                mapOf(
+                    "schoolId" to targetSchoolId,
+                    "tenantId" to targetSchoolId,
+                    "schoolName" to resolvedSchoolName,
+                    "regionId" to resolvedRegionId,
+                    "directorUid" to actor.userId,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        }
+
+        logAudit(
+            actor = actor,
+            action = "DIRECTOR_SETUP_SCHOOL",
+            targetType = "school",
+            targetId = targetSchoolId,
+            schoolId = targetSchoolId,
+            details = "Rattachement établissement $resolvedSchoolName par le directeur ${actor.fullName}"
+        )
+        targetSchoolId
+    }.onFailure {
+        handleFirestoreError(it, OperationType.WRITE, "schools", auth)
+    }
+
+    suspend fun importOfficialDjiboutiSchools(
+        actor: UserProfile,
+        existingRegions: List<Region>,
+        existingSchools: List<School>
+    ): Result<Int> {
+        val natUid = actor.nationalAdminUid.ifBlank { actor.userId }
+        return DjiboutiSchoolsSeeder(db, auth)
+            .seed(
+                actorUid = actor.userId,
+                actorName = actor.fullName,
+                actorRole = actor.role,
+                nationalAdminUid = natUid,
+                existingRegions = existingRegions,
+                existingSchools = existingSchools
+            )
+            .map { it.createdCount }
+            .onFailure {
+                handleFirestoreError(it, OperationType.CREATE, "schools", auth)
+            }
     }
 
     suspend fun createClass(
@@ -549,6 +733,21 @@ class AdminRepository(
             phone = request.phone
         ).getOrThrow()
 
+        if (assignedRole == UserRole.DIRECTEUR && school != null &&
+            (school.directorUid.isBlank() || school.directorUid == request.userId)
+        ) {
+            db.collection("schools").document(school.id)
+                .update(
+                    mapOf(
+                        "directorUid" to request.userId,
+                        "directorName" to request.fullName,
+                        "authorizedUids" to FieldValue.arrayUnion(request.userId),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+        }
+
         db.collection("access_requests").document(request.userId)
             .update(
                 mapOf(
@@ -596,6 +795,257 @@ class AdminRepository(
         Unit
     }.onFailure {
         handleFirestoreError(it, OperationType.UPDATE, "access_requests/${request.userId}", auth)
+    }
+
+    suspend fun updateRegion(
+        actor: UserProfile,
+        region: Region,
+        name: String,
+        code: String
+    ): Result<Unit> = runCatching {
+        db.collection("regions").document(region.id)
+            .update(
+                mapOf(
+                    "name" to name.trim(),
+                    "code" to code.trim().uppercase(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        logAudit(actor, "UPDATE_REGION", "region", region.id, "", "Modification région ${name.trim()} (${code.trim().uppercase()})")
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "regions/${region.id}", auth)
+    }
+
+    suspend fun updateSchool(
+        actor: UserProfile,
+        school: School,
+        region: Region?,
+        name: String,
+        code: String,
+        schoolType: String,
+        address: String,
+        sector: String,
+        description: String,
+        isActive: Boolean
+    ): Result<Unit> = runCatching {
+        val updates = mutableMapOf<String, Any>(
+            "name" to name.trim().take(160),
+            "code" to code.trim().uppercase().take(30),
+            "schoolType" to schoolType,
+            "address" to address.trim().take(240),
+            "sector" to sector.trim().take(120),
+            "description" to description.trim().take(300),
+            "isActive" to isActive,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (region != null) {
+            updates["regionId"] = region.id
+            updates["regionName"] = region.name.take(120)
+            if (region.regionalAdminUid.isNotBlank()) {
+                updates["regionalAdminUid"] = region.regionalAdminUid
+            }
+        }
+        db.collection("schools").document(school.id).update(updates).await()
+        logAudit(actor, "UPDATE_SCHOOL", "school", school.id, school.id, "Modification établissement ${name.trim()}")
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "schools/${school.id}", auth)
+    }
+
+    suspend fun updateClass(
+        actor: UserProfile,
+        schoolClass: SchoolClass,
+        name: String,
+        level: String,
+        academicYear: String
+    ): Result<Unit> = runCatching {
+        db.collection("classes").document(schoolClass.id)
+            .update(
+                mapOf(
+                    "name" to name.trim().take(60),
+                    "level" to level.trim().take(40),
+                    "academicYear" to academicYear.trim().take(30),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        logAudit(actor, "UPDATE_CLASS", "class", schoolClass.id, schoolClass.schoolId, "Modification classe ${name.trim()} (${schoolClass.schoolName})")
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "classes/${schoolClass.id}", auth)
+    }
+
+    suspend fun updateSubject(
+        actor: UserProfile,
+        subject: Subject,
+        name: String,
+        code: String,
+        coefficient: Double,
+        teacherUid: String,
+        teacherName: String
+    ): Result<Unit> = runCatching {
+        val cleanTeacherUid = teacherUid.trim()
+        val updatedAuthUids = (subject.authorizedUids + listOfNotNull(cleanTeacherUid.takeIf { it.isNotBlank() }))
+            .filter { it.isNotBlank() }.distinct()
+        val batch = db.batch()
+        batch.update(
+            db.collection("subjects").document(subject.id),
+            mapOf(
+                "name" to name.trim().take(100),
+                "code" to code.trim().uppercase().take(20),
+                "coefficient" to coefficient.coerceIn(0.5, 20.0),
+                "teacherUid" to cleanTeacherUid,
+                "teacherName" to if (cleanTeacherUid.isNotBlank()) teacherName.trim().take(120) else "",
+                "authorizedUids" to updatedAuthUids,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        )
+        if (cleanTeacherUid.isNotBlank() && subject.classId.isNotBlank()) {
+            batch.update(
+                db.collection("classes").document(subject.classId),
+                mapOf(
+                    "teacherUids" to FieldValue.arrayUnion(cleanTeacherUid),
+                    "authorizedUids" to FieldValue.arrayUnion(cleanTeacherUid),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+        }
+        batch.commit().await()
+        logAudit(actor, "UPDATE_SUBJECT", "subject", subject.id, subject.schoolId, "Modification matière ${name.trim()} (coeff $coefficient)")
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "subjects/${subject.id}", auth)
+    }
+
+    suspend fun updateScheduleEntry(
+        actor: UserProfile,
+        entry: ScheduleEntry,
+        subject: Subject?,
+        dayOfWeek: String,
+        startTime: String,
+        endTime: String,
+        room: String
+    ): Result<Unit> = runCatching {
+        val updates = mutableMapOf<String, Any>(
+            "dayOfWeek" to dayOfWeek,
+            "startTime" to startTime.trim().take(10),
+            "endTime" to endTime.trim().take(10),
+            "room" to room.trim().take(40),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (subject != null) {
+            updates["subjectId"] = subject.id
+            updates["subjectName"] = subject.name.take(100)
+            updates["teacherUid"] = subject.teacherUid
+            updates["teacherName"] = subject.teacherName.take(120)
+            val mergedAuth = (entry.authorizedUids + subject.authorizedUids + listOfNotNull(subject.teacherUid.takeIf { it.isNotBlank() }))
+                .filter { it.isNotBlank() }.distinct()
+            updates["authorizedUids"] = mergedAuth
+        }
+        db.collection("schedules").document(entry.id).update(updates).await()
+        logAudit(actor, "UPDATE_SCHEDULE", "schedule", entry.id, entry.schoolId, "Modification créneau ${dayOfWeek} ${startTime}-${endTime}")
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "schedules/${entry.id}", auth)
+    }
+
+    suspend fun updateStudent(
+        actor: UserProfile,
+        student: Student,
+        targetClass: SchoolClass?,
+        firstName: String,
+        lastName: String,
+        matricule: String,
+        dateOfBirth: String,
+        gender: String,
+        gradesVisibleToStudent: Boolean,
+        isActive: Boolean
+    ): Result<Unit> = runCatching {
+        val resolvedClass = targetClass
+        val mergedTeachers = if (resolvedClass != null) {
+            (student.teacherUids + resolvedClass.teacherUids).filter { it.isNotBlank() }.distinct()
+        } else student.teacherUids
+        val mergedAuth = if (resolvedClass != null) {
+            (student.authorizedUids + resolvedClass.authorizedUids + student.parentUids).filter { it.isNotBlank() }.distinct()
+        } else student.authorizedUids
+
+        val updates = mutableMapOf<String, Any>(
+            "firstName" to firstName.trim().take(80),
+            "lastName" to lastName.trim().take(80),
+            "matricule" to matricule.trim().uppercase().take(40),
+            "dateOfBirth" to dateOfBirth.trim().take(20),
+            "gender" to gender,
+            "gradesVisibleToStudent" to gradesVisibleToStudent,
+            "isActive" to isActive,
+            "teacherUids" to mergedTeachers,
+            "authorizedUids" to mergedAuth,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (resolvedClass != null && resolvedClass.schoolId == student.schoolId) {
+            updates["classId"] = resolvedClass.id
+            updates["className"] = resolvedClass.name.take(80)
+        }
+        db.collection("students").document(student.id).update(updates).await()
+        logAudit(actor, "UPDATE_STUDENT", "student", student.id, student.schoolId, "Modification fiche élève ${firstName.trim()} ${lastName.trim()}")
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "students/${student.id}", auth)
+    }
+
+    suspend fun updateRoleInvitation(
+        actor: UserProfile,
+        invitation: RoleInvitation,
+        fullName: String,
+        phone: String,
+        status: String
+    ): Result<Unit> = runCatching {
+        db.collection("role_invitations").document(invitation.id)
+            .update(
+                mapOf(
+                    "fullName" to fullName.trim().take(120),
+                    "phone" to phone.trim().take(40),
+                    "status" to status,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        logAudit(actor, "UPDATE_INVITATION", "role_invitation", invitation.id, invitation.schoolId, "Modification invitation ${invitation.email} ($status)")
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "role_invitations/${invitation.id}", auth)
+    }
+
+    suspend fun updateManagedUser(
+        actor: UserProfile,
+        targetUser: UserProfile,
+        fullName: String,
+        role: UserRole?,
+        school: School?,
+        isActive: Boolean
+    ): Result<Unit> = runCatching {
+        val updates = mutableMapOf<String, Any>(
+            "fullName" to fullName.trim().take(120),
+            "isActive" to isActive,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (actor.roleEnum() == UserRole.ADMIN_NATIONAL) {
+            if (role != null) {
+                updates["role"] = role.key
+            }
+            if (school != null) {
+                updates["schoolId"] = school.id
+                updates["tenantId"] = school.tenantId.ifBlank { school.id }
+                updates["schoolName"] = school.name.take(160)
+                if (school.regionId.isNotBlank()) updates["regionId"] = school.regionId
+            }
+        }
+        db.collection("users").document(targetUser.userId).update(updates).await()
+        logAudit(actor, "UPDATE_USER", "user", targetUser.userId, school?.id ?: targetUser.schoolId, "Modification compte utilisateur ${fullName.trim()}")
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "users/${targetUser.userId}", auth)
     }
 
     suspend fun logAudit(

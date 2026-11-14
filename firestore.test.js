@@ -475,3 +475,114 @@ test("Role registration access_requests: applicant submits, non-admin cannot lis
     })
   );
 });
+
+test("Record updates: authorized director/teacher succeed on allowed fields, parent or unauthorized denied", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("users").doc(DIRECTOR_UID).set({
+      userId: DIRECTOR_UID,
+      fullName: "Directeur Test",
+      role: "directeur",
+      schoolId: "school_1",
+      tenantId: "school_1",
+      isActive: true,
+      consentAccepted: true,
+      createdAt: nowTs(),
+    });
+    await db.collection("users").doc(TEACHER_UID).set({
+      userId: TEACHER_UID,
+      fullName: "Enseignant Test",
+      role: "enseignant",
+      schoolId: "school_1",
+      tenantId: "school_1",
+      isActive: true,
+      consentAccepted: true,
+      createdAt: nowTs(),
+    });
+    await db.collection("schedules").doc("sched_1").set({
+      schoolId: "school_1",
+      tenantId: "school_1",
+      classId: "class_1",
+      subjectId: "subj_1",
+      subjectName: "Maths",
+      dayOfWeek: "lundi",
+      startTime: "08:00",
+      endTime: "09:00",
+      room: "S1",
+      directorUid: DIRECTOR_UID,
+      createdByUid: DIRECTOR_UID,
+      createdAt: nowTs(),
+    });
+    await db.collection("students").doc("stu_edit_1").set({
+      schoolId: "school_1",
+      tenantId: "school_1",
+      classId: "class_1",
+      firstName: "Ali",
+      lastName: "Hassan",
+      matricule: "MAT-01",
+      isActive: true,
+      directorUid: DIRECTOR_UID,
+      createdByUid: DIRECTOR_UID,
+      createdAt: nowTs(),
+    });
+    await db.collection("attendance").doc("att_edit_1").set({
+      schoolId: "school_1",
+      tenantId: "school_1",
+      classId: "class_1",
+      studentId: "stu_edit_1",
+      teacherUid: TEACHER_UID,
+      directorUid: DIRECTOR_UID,
+      date: "2026-11-10",
+      status: "absent",
+      justified: false,
+      createdAt: nowTs(),
+    });
+  });
+
+  const dirDb = testEnv.authenticatedContext(DIRECTOR_UID).firestore();
+  const teacherDb = testEnv.authenticatedContext(TEACHER_UID).firestore();
+  const parentDb = testEnv.authenticatedContext(PARENT_A_UID).firestore();
+
+  await assertSucceeds(
+    dirDb.collection("schedules").doc("sched_1").update({
+      subjectId: "subj_2",
+      subjectName: "Physique",
+      dayOfWeek: "mardi",
+      startTime: "10:00",
+      endTime: "11:00",
+      room: "Labo",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    dirDb.collection("students").doc("stu_edit_1").update({
+      matricule: "MAT-02",
+      firstName: "Ali-Omar",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    teacherDb.collection("attendance").doc("att_edit_1").update({
+      date: "2026-11-11",
+      status: "retard",
+      minutesLate: 10,
+      justified: true,
+      reason: "Retard justifié",
+      updatedAt: nowTs(),
+    })
+  );
+
+  await assertFails(
+    parentDb.collection("attendance").doc("att_edit_1").update({
+      justified: true,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    parentDb.collection("students").doc("stu_edit_1").update({
+      matricule: "HACK",
+      updatedAt: nowTs(),
+    })
+  );
+});
+

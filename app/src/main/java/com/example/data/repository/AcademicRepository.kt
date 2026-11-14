@@ -503,4 +503,154 @@ class AcademicRepository(
     }.onFailure {
         handleFirestoreError(it, OperationType.CREATE, "report_cards", auth)
     }
+
+    suspend fun updateLesson(
+        actor: UserProfile,
+        lesson: LessonEntry,
+        lessonDate: String,
+        chapter: String,
+        title: String,
+        summary: String,
+        skillsWorked: String,
+        classExercises: String,
+        homework: String,
+        homeworkDueDate: String,
+        attachmentLabel: String
+    ): Result<Unit> = runCatching {
+        db.collection("lessons").document(lesson.id)
+            .update(
+                mapOf(
+                    "lessonDate" to lessonDate.trim(),
+                    "chapter" to chapter.trim().take(160),
+                    "title" to title.trim().take(200),
+                    "summary" to summary.trim().take(2000),
+                    "skillsWorked" to skillsWorked.trim().take(800),
+                    "classExercises" to classExercises.trim().take(1200),
+                    "homework" to homework.trim().take(1200),
+                    "homeworkDueDate" to homeworkDueDate.trim().take(20),
+                    "attachmentLabel" to attachmentLabel.trim().take(200),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "lessons/${lesson.id}", auth)
+    }
+
+    suspend fun updateAssessment(
+        actor: UserProfile,
+        grade: AssessmentGrade,
+        title: String,
+        assessmentType: String,
+        score: Double,
+        maxScore: Double,
+        coefficient: Double,
+        period: String,
+        date: String,
+        comment: String
+    ): Result<Unit> = runCatching {
+        db.collection("assessments").document(grade.id)
+            .update(
+                mapOf(
+                    "title" to title.trim().take(160),
+                    "assessmentType" to assessmentType,
+                    "score" to score,
+                    "maxScore" to maxScore,
+                    "coefficient" to coefficient.coerceIn(0.5, 20.0),
+                    "period" to period,
+                    "date" to date.trim(),
+                    "comment" to comment.trim().take(400),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "assessments/${grade.id}", auth)
+    }
+
+    suspend fun updateAttendance(
+        actor: UserProfile,
+        record: AttendanceRecord,
+        date: String,
+        status: String,
+        minutesLate: Int,
+        justified: Boolean,
+        reason: String
+    ): Result<Unit> = runCatching {
+        db.collection("attendance").document(record.id)
+            .update(
+                mapOf(
+                    "date" to date.trim(),
+                    "status" to status,
+                    "minutesLate" to if (status == "retard") minutesLate.coerceIn(0, 480) else 0,
+                    "justified" to justified,
+                    "reason" to reason.trim().take(400),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "attendance/${record.id}", auth)
+    }
+
+    suspend fun updateDifficulty(
+        actor: UserProfile,
+        alert: DifficultyAlert,
+        category: String,
+        severity: String,
+        observation: String,
+        recommendation: String,
+        resolved: Boolean
+    ): Result<Unit> = runCatching {
+        db.collection("difficulties").document(alert.id)
+            .update(
+                mapOf(
+                    "category" to category,
+                    "severity" to severity,
+                    "observation" to observation.trim().take(1000),
+                    "recommendation" to recommendation.trim().take(800),
+                    "resolved" to resolved,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "difficulties/${alert.id}", auth)
+    }
+
+    suspend fun updateReportCard(
+        actor: UserProfile,
+        reportCard: ReportCard,
+        overallAverage: Double,
+        classAverage: Double,
+        rankLabel: String,
+        absencesCount: Int,
+        tardiesCount: Int,
+        councilDecision: String,
+        directorObservation: String,
+        published: Boolean
+    ): Result<Unit> = runCatching {
+        db.collection("report_cards").document(reportCard.id)
+            .update(
+                mapOf(
+                    "overallAverage" to overallAverage.coerceIn(0.0, 20.0),
+                    "classAverage" to classAverage.coerceIn(0.0, 20.0),
+                    "rankLabel" to rankLabel.trim().take(30),
+                    "absencesCount" to absencesCount.coerceIn(0, 500),
+                    "tardiesCount" to tardiesCount.coerceIn(0, 500),
+                    "councilDecision" to councilDecision.trim().take(160),
+                    "directorObservation" to directorObservation.trim().take(800),
+                    "published" to published,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "report_cards/${reportCard.id}", auth)
+    }
 }
