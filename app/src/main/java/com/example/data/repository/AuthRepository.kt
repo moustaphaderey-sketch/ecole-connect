@@ -3,6 +3,7 @@ package com.example.data.repository
 import com.example.data.model.AccessRequest
 import com.example.data.model.PlatformSettings
 import com.example.data.model.RoleInvitation
+import com.example.data.model.SchoolDirectoryEntry
 import com.example.data.model.UserPrivateContact
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
@@ -144,7 +145,7 @@ class AuthRepository(
         email: String,
         phone: String,
         consentAccepted: Boolean,
-        seedOfficialSchools: Boolean = true
+        seedOfficialSchools: Boolean = false
     ): Result<Unit> = runCatching {
         val cleanName = fullName.trim().ifBlank { "Administrateur National" }
         val bootstrapRef = db.collection("platform_config").document("bootstrap")
@@ -271,6 +272,7 @@ class AuthRepository(
         val resolvedDirUid = if (invitation.role == UserRole.DIRECTEUR.key) uid else invitation.directorUid
         if (resolvedDirUid.isNotBlank()) userPayload["directorUid"] = resolvedDirUid
         if (invitation.classIds.isNotEmpty()) userPayload["classIds"] = invitation.classIds
+        if (invitation.subjectIds.isNotEmpty()) userPayload["subjectIds"] = invitation.subjectIds
         if (invitation.studentIds.isNotEmpty()) userPayload["studentIds"] = invitation.studentIds
 
         val contactPayload = mutableMapOf<String, Any>(
@@ -336,6 +338,23 @@ class AuthRepository(
         handleFirestoreError(it, OperationType.WRITE, "users/$uid", auth)
     }
 
+    fun observeSchoolDirectory(): Flow<List<SchoolDirectoryEntry>> {
+        return db.collection("school_directory")
+            .whereEqualTo("isActive", true)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(SchoolDirectoryEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedBy { it.name }
+            }
+            .catch { error ->
+                val firestoreError = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (firestoreError == null && error is CancellationException) throw error
+                emit(emptyList())
+            }
+    }
+
     fun observeMyAccessRequest(uid: String): Flow<AccessRequest?> {
         val path = "access_requests/$uid"
         return db.collection("access_requests").document(uid)
@@ -362,17 +381,35 @@ class AuthRepository(
         email: String,
         requestedRole: UserRole,
         schoolHint: String,
-        phone: String
+        phone: String,
+        firstName: String = "",
+        lastName: String = "",
+        schoolId: String = "",
+        schoolName: String = "",
+        extraDetails: String = ""
     ): Result<Unit> = runCatching {
+        val cleanFirst = firstName.trim().take(80)
+        val cleanLast = lastName.trim().take(80)
+        val resolvedFullName = fullName.trim().ifBlank { "$cleanFirst $cleanLast".trim() }.take(120)
+        val cleanSchoolName = schoolName.trim().take(160)
+        val resolvedHint = schoolHint.trim().ifBlank {
+            listOf(cleanSchoolName, extraDetails.trim()).filter { it.isNotBlank() }.joinToString(" • ")
+        }.take(200)
         val docRef = db.collection("access_requests").document(uid)
         val payload = mapOf(
             "userId" to uid,
-            "fullName" to fullName.trim(),
-            "email" to email.trim().lowercase(),
+            "firstName" to cleanFirst,
+            "lastName" to cleanLast,
+            "fullName" to resolvedFullName,
+            "email" to email.trim().lowercase().take(160),
             "requestedRole" to requestedRole.key,
-            "schoolHint" to schoolHint.trim(),
-            "phone" to phone.trim(),
+            "schoolId" to schoolId.trim().take(128),
+            "schoolName" to cleanSchoolName,
+            "schoolHint" to resolvedHint,
+            "extraDetails" to extraDetails.trim().take(300),
+            "phone" to phone.trim().take(40),
             "status" to "pending",
+            "reviewerUid" to "",
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -380,6 +417,46 @@ class AuthRepository(
         Unit
     }.onFailure {
         handleFirestoreError(it, OperationType.CREATE, "access_requests/$uid", auth)
+    }
+
+    suspend fun resubmitAccessRequest(
+        uid: String,
+        firstName: String,
+        lastName: String,
+        fullName: String,
+        requestedRole: UserRole,
+        schoolId: String,
+        schoolName: String,
+        schoolHint: String,
+        extraDetails: String,
+        applicantResponse: String,
+        phone: String
+    ): Result<Unit> = runCatching {
+        val cleanFirst = firstName.trim().take(80)
+        val cleanLast = lastName.trim().take(80)
+        val resolvedFullName = fullName.trim().ifBlank { "$cleanFirst $cleanLast".trim() }.take(120)
+        val cleanSchoolName = schoolName.trim().take(160)
+        val resolvedHint = schoolHint.trim().ifBlank {
+            listOf(cleanSchoolName, extraDetails.trim()).filter { it.isNotBlank() }.joinToString(" • ")
+        }.take(200)
+        val updates = mapOf(
+            "firstName" to cleanFirst,
+            "lastName" to cleanLast,
+            "fullName" to resolvedFullName,
+            "phone" to phone.trim().take(40),
+            "requestedRole" to requestedRole.key,
+            "schoolId" to schoolId.trim().take(128),
+            "schoolName" to cleanSchoolName,
+            "schoolHint" to resolvedHint,
+            "extraDetails" to extraDetails.trim().take(300),
+            "applicantResponse" to applicantResponse.trim().take(500),
+            "status" to "pending",
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        db.collection("access_requests").document(uid).update(updates).await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "access_requests/$uid", auth)
     }
 
     suspend fun updateProfilePreferences(

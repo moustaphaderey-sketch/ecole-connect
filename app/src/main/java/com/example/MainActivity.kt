@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
@@ -93,6 +94,7 @@ import com.example.ui.screens.AdministrationScreen
 import com.example.ui.screens.AttendanceAndAlertsScreen
 import com.example.ui.screens.CahierTexteScreen
 import com.example.ui.screens.CommunicationScreen
+import com.example.ui.screens.ConnectedDevicesScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.GradesAndBulletinsScreen
 import com.example.ui.screens.NotificationsAndAuditScreen
@@ -183,6 +185,7 @@ private fun AuthenticatedAppHost(
     )
 
     val gateState by vm.accountGateState.collectAsStateWithLifecycle()
+    val schoolDirectory by vm.schoolDirectory.collectAsStateWithLifecycle()
     val isBusy by vm.isBusy.collectAsStateWithLifecycle()
     val errorMessage by vm.errorMessage.collectAsStateWithLifecycle()
     val feedbackMessage by vm.feedbackMessage.collectAsStateWithLifecycle()
@@ -217,11 +220,13 @@ private fun AuthenticatedAppHost(
                 userEmail = user.email ?: "",
                 userDisplayName = user.displayName ?: "",
                 pendingDraft = pendingDraft,
+                schoolDirectory = schoolDirectory,
                 isBusy = isBusy,
                 errorMessage = errorMessage,
                 onBootstrapAdmin = vm::bootstrapNationalAdmin,
                 onClaimInvitation = vm::claimInvitation,
                 onSubmitAccessRequest = vm::submitAccessRequest,
+                onResubmitAccessRequest = vm::resubmitAccessRequest,
                 onSaveConsent = vm::acceptConsentAndSaveChannel,
                 onRefreshStatus = vm::refreshOnboardingChecks,
                 onSignOut = handleSignOut
@@ -238,6 +243,7 @@ private fun sectionIcon(section: AppSection): ImageVector = when (section) {
     AppSection.ADMINISTRATION -> Icons.Filled.School
     AppSection.MESSAGERIE -> Icons.AutoMirrored.Filled.Chat
     AppSection.NOTIFICATIONS -> Icons.Filled.Notifications
+    AppSection.APPAREILS_CONNECTES -> Icons.Filled.Devices
     AppSection.A_PROPOS -> Icons.Filled.Info
 }
 
@@ -249,6 +255,7 @@ private fun sectionShortLabel(section: AppSection): String = when (section) {
     AppSection.ADMINISTRATION -> "Gestion"
     AppSection.MESSAGERIE -> "Messages"
     AppSection.NOTIFICATIONS -> "Alertes"
+    AppSection.APPAREILS_CONNECTES -> "Web"
     AppSection.A_PROPOS -> "À propos"
 }
 
@@ -276,6 +283,7 @@ private fun EcoleConnecteeMainShell(
     val lessons by viewModel.lessons.collectAsStateWithLifecycle()
     val assessments by viewModel.assessments.collectAsStateWithLifecycle()
     val attendance by viewModel.attendance.collectAsStateWithLifecycle()
+    val teacherAttendance by viewModel.teacherAttendance.collectAsStateWithLifecycle()
     val difficulties by viewModel.difficulties.collectAsStateWithLifecycle()
     val reportCards by viewModel.reportCards.collectAsStateWithLifecycle()
     val invitations by viewModel.invitations.collectAsStateWithLifecycle()
@@ -285,12 +293,22 @@ private fun EcoleConnecteeMainShell(
     val announcements by viewModel.announcements.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
+    val connectedDevices by viewModel.connectedDevices.collectAsStateWithLifecycle()
+    val pendingQrInspection by viewModel.pendingQrInspection.collectAsStateWithLifecycle()
+    val qrInspectionLoading by viewModel.qrInspectionLoading.collectAsStateWithLifecycle()
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
 
     val role = profile.roleEnum()
     val unreadNotificationsCount = remember(notifications) { notifications.count { !it.read } }
     val pendingRequestsCount = remember(role, accessRequests) {
-        if (role == UserRole.ADMIN_NATIONAL) accessRequests.count { it.status == "pending" } else 0
+        when (role) {
+            UserRole.ADMIN_NATIONAL -> accessRequests.count { it.status == "pending" }
+            UserRole.DIRECTEUR -> accessRequests.count {
+                it.status == "pending" &&
+                    it.requestedRole in listOf(UserRole.PARENT.key, UserRole.ENSEIGNANT.key, UserRole.ELEVE.key)
+            }
+            else -> 0
+        }
     }
     val totalAlertBadgeCount = unreadNotificationsCount + pendingRequestsCount
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -598,6 +616,12 @@ private fun EcoleConnecteeMainShell(
                                 onRecordAttendance = viewModel::recordAttendance,
                                 onReportDifficulty = viewModel::reportDifficulty,
                                 onResolveDifficulty = viewModel::resolveDifficulty,
+                                schools = schools,
+                                managedUsers = managedUsers,
+                                teacherAttendance = teacherAttendance,
+                                onRecordTeacherAttendance = viewModel::recordTeacherAttendance,
+                                onUpdateTeacherAttendance = viewModel::updateTeacherAttendance,
+                                onDeleteTeacherAttendance = viewModel::deleteTeacherAttendance,
                                 onUpdateAttendance = viewModel::updateAttendance,
                                 onUpdateDifficulty = viewModel::updateDifficulty
                             )
@@ -624,11 +648,13 @@ private fun EcoleConnecteeMainShell(
                                 onCreateSubject = viewModel::createSubject,
                                 onCreateScheduleEntry = viewModel::createScheduleEntry,
                                 onEnrollStudent = viewModel::enrollStudent,
+                                onImportStudentsCsv = viewModel::importStudentsCsv,
                                 onLinkParent = viewModel::linkParentToStudent,
                                 onCreateInvitation = viewModel::createInvitation,
                                 onSetUserActive = viewModel::setUserActive,
                                 onAssignDirector = viewModel::assignDirector,
                                 onApproveAccessRequest = viewModel::approveAccessRequest,
+                                onRequestMoreInfoAccessRequest = viewModel::requestMoreInfoAccessRequest,
                                 onRejectAccessRequest = viewModel::rejectAccessRequest,
                                 onUpdateRegion = viewModel::updateRegion,
                                 onUpdateSchool = viewModel::updateSchool,
@@ -666,11 +692,30 @@ private fun EcoleConnecteeMainShell(
                                 accessRequests = accessRequests,
                                 regions = regions,
                                 schools = schools,
+                                classes = classes,
+                                subjects = subjects,
+                                students = students,
                                 onMarkNotificationRead = viewModel::markNotificationRead,
                                 onApproveAccessRequest = viewModel::approveAccessRequest,
+                                onRequestMoreInfoAccessRequest = viewModel::requestMoreInfoAccessRequest,
                                 onRejectAccessRequest = viewModel::rejectAccessRequest,
                                 onOpenApprovals = viewModel::openAdminApprovals,
+                                onOpenAdminTab = viewModel::openAdminTab,
                                 onSavePreferences = viewModel::acceptConsentAndSaveChannel
+                            )
+
+                            AppSection.APPAREILS_CONNECTES -> ConnectedDevicesScreen(
+                                devices = connectedDevices,
+                                pendingInspection = pendingQrInspection,
+                                isInspecting = qrInspectionLoading,
+                                isBusy = isBusy,
+                                onInspectQrCode = viewModel::inspectQrPairingRequest,
+                                onDismissInspection = viewModel::clearPendingQrInspection,
+                                onConfirmPairing = viewModel::confirmQrPairing,
+                                onRejectPairing = viewModel::rejectQrPairing,
+                                onRevokeDevice = viewModel::revokeDeviceSession,
+                                onRevokeAllDevices = viewModel::revokeAllDeviceSessions,
+                                webPortalUrl = androidx.compose.ui.res.stringResource(R.string.web_portal_url)
                             )
 
                             AppSection.A_PROPOS -> AboutUsScreen()

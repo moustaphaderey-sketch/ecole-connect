@@ -9,6 +9,7 @@ import com.example.data.model.School
 import com.example.data.model.SchoolClass
 import com.example.data.model.Student
 import com.example.data.model.Subject
+import com.example.data.model.TeacherAttendanceRecord
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
 import com.google.firebase.auth.FirebaseAuth
@@ -21,6 +22,7 @@ import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
@@ -54,7 +56,7 @@ class AcademicRepository(
         val base = db.collection(collection)
         val uid = profile.userId
         return when (profile.roleEnum()) {
-            UserRole.ADMIN_NATIONAL -> base.whereEqualTo("nationalAdminUid", profile.nationalAdminUid.ifBlank { uid })
+            UserRole.ADMIN_NATIONAL -> base
             UserRole.ADMIN_REGIONAL -> base.whereEqualTo("regionalAdminUid", uid)
             UserRole.DIRECTEUR -> base.whereEqualTo("directorUid", uid)
             UserRole.ENSEIGNANT -> base.whereEqualTo("teacherUid", uid)
@@ -88,6 +90,19 @@ class AcademicRepository(
 
     fun observeDifficulties(profile: UserProfile): Flow<List<DifficultyAlert>> =
         observeCollection("difficulties", roleScopedQuery("difficulties", profile), profile.userId)
+
+    fun observeTeacherAttendance(profile: UserProfile): Flow<List<TeacherAttendanceRecord>> {
+        val base = db.collection("teacher_attendance")
+        val uid = profile.userId
+        val query = when (profile.roleEnum()) {
+            UserRole.ADMIN_NATIONAL -> base
+            UserRole.ADMIN_REGIONAL -> base.whereEqualTo("regionalAdminUid", uid)
+            UserRole.DIRECTEUR -> base.whereEqualTo("directorUid", uid)
+            UserRole.ENSEIGNANT -> base.whereEqualTo("teacherUid", uid)
+            UserRole.PARENT, UserRole.ELEVE -> return flowOf(emptyList())
+        }
+        return observeCollection("teacher_attendance", query, uid)
+    }
 
     fun observeReportCards(profile: UserProfile): Flow<List<ReportCard>> {
         val base = db.collection("report_cards")
@@ -652,5 +667,111 @@ class AcademicRepository(
         Unit
     }.onFailure {
         handleFirestoreError(it, OperationType.UPDATE, "report_cards/${reportCard.id}", auth)
+    }
+
+    suspend fun recordTeacherAttendance(
+        actor: UserProfile,
+        school: School,
+        teacher: UserProfile,
+        date: String,
+        status: String,
+        minutesLate: Int,
+        justified: Boolean,
+        reason: String
+    ): Result<String> = runCatching {
+        val docId = UUID.randomUUID().toString()
+        val dirUid = school.directorUid.ifBlank { actor.userId }
+        val tenantId = school.tenantId.ifBlank { school.id }
+        val authUids = listOfNotNull(
+            actor.userId,
+            dirUid.takeIf { it.isNotBlank() },
+            teacher.userId.takeIf { it.isNotBlank() },
+            school.nationalAdminUid.takeIf { it.isNotBlank() },
+            school.regionalAdminUid.takeIf { it.isNotBlank() }
+        ).distinct()
+
+        val payload = mutableMapOf<String, Any>(
+            "schoolId" to school.id,
+            "tenantId" to tenantId,
+            "regionId" to school.regionId,
+            "teacherUid" to teacher.userId,
+            "teacherName" to teacher.fullName,
+            "directorUid" to dirUid,
+            "authorizedUids" to authUids,
+            "date" to date.trim(),
+            "status" to status,
+            "minutesLate" to if (status == "retard") minutesLate.coerceIn(0, 480) else 0,
+            "justified" to justified,
+            "reason" to reason.trim().take(400),
+            "createdByUid" to actor.userId,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (school.regionalAdminUid.isNotBlank()) payload["regionalAdminUid"] = school.regionalAdminUid
+        if (school.nationalAdminUid.isNotBlank()) payload["nationalAdminUid"] = school.nationalAdminUid
+
+        val batch = db.batch()
+        batch.set(db.collection("teacher_attendance").document(docId), payload)
+        if (status != "present" && teacher.userId.isNotBlank()) {
+            val label = if (status == "absent") "Absence enregistrée" else "Retard enregistré ($minutesLate min)"
+            val notifType = if (status == "absent") "absence" else "retard"
+            batch.set(
+                db.collection("notifications").document(UUID.randomUUID().toString()),
+                mapOf(
+                    "recipientUid" to teacher.userId,
+                    "senderUid" to actor.userId,
+                    "schoolId" to school.id,
+                    "tenantId" to tenantId,
+                    "type" to notifType,
+                    "title" to "$label • ${date.trim()}",
+                    "body" to reason.trim().ifBlank { "Enregistré par la direction (${school.name})." },
+                    "relatedId" to docId,
+                    "read" to false,
+                    "channelPreference" to "app",
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+        }
+        batch.commit().await()
+        docId
+    }.onFailure {
+        handleFirestoreError(it, OperationType.CREATE, "teacher_attendance", auth)
+    }
+
+    suspend fun updateTeacherAttendance(
+        actor: UserProfile,
+        record: TeacherAttendanceRecord,
+        date: String,
+        status: String,
+        minutesLate: Int,
+        justified: Boolean,
+        reason: String
+    ): Result<Unit> = runCatching {
+        db.collection("teacher_attendance").document(record.id)
+            .update(
+                mapOf(
+                    "date" to date.trim(),
+                    "status" to status,
+                    "minutesLate" to if (status == "retard") minutesLate.coerceIn(0, 480) else 0,
+                    "justified" to justified,
+                    "reason" to reason.trim().take(400),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.UPDATE, "teacher_attendance/${record.id}", auth)
+    }
+
+    suspend fun deleteTeacherAttendance(
+        actor: UserProfile,
+        record: TeacherAttendanceRecord
+    ): Result<Unit> = runCatching {
+        db.collection("teacher_attendance").document(record.id).delete().await()
+        Unit
+    }.onFailure {
+        handleFirestoreError(it, OperationType.DELETE, "teacher_attendance/${record.id}", auth)
     }
 }

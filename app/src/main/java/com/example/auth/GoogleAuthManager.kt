@@ -51,14 +51,23 @@ enum class RegistrationCategory(
 data class PendingRegistrationDraft(
     val category: RegistrationCategory,
     val role: UserRole,
-    val fullName: String,
+    val lastName: String,
+    val firstName: String,
+    val emailHint: String = "",
     val phone: String,
+    val schoolId: String = "",
+    val schoolName: String = "",
     val schoolOrRegionHint: String,
     val extraDetail: String,
     val consentAccepted: Boolean
 ) {
+    val fullName: String
+        get() = listOf(firstName.trim(), lastName.trim())
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+
     fun formattedSchoolHint(): String {
-        val base = schoolOrRegionHint.trim()
+        val base = schoolName.ifBlank { schoolOrRegionHint }.trim()
         val extra = extraDetail.trim()
         val combined = when {
             base.isNotBlank() && extra.isNotBlank() -> "$base — $extra"

@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Class
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Link
@@ -27,9 +31,11 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SupervisorAccount
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -51,6 +57,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -73,6 +80,7 @@ import com.example.ui.components.SchoolLevelFilterRow
 import com.example.ui.components.SchoolTypeBadge
 import com.example.ui.components.SectionHeader
 import com.example.ui.components.TabChipsRow
+import com.example.util.CsvStudentHelper
 
 @Composable
 fun AdministrationScreen(
@@ -90,28 +98,31 @@ fun AdministrationScreen(
     targetTabName: String? = null,
     onTargetTabConsumed: () -> Unit = {},
     onCreateRegion: (String, String) -> Unit,
-    onCreateSchool: (Region, String, String, String, String) -> Unit,
-    onSetupDirectorSchool: (Region?, String, String, String, String, String) -> Unit = { _, _, _, _, _, _ -> },
+    onCreateSchool: (Region, String, String, String, String, String, String) -> Unit,
+    onSetupDirectorSchool: (Region?, String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _ -> },
     onImportOfficialSchools: () -> Unit = {},
     onCreateClass: (School, String, String, String) -> Unit,
     onCreateSubject: (School, SchoolClass, String, String, Double, String, String) -> Unit,
     onCreateScheduleEntry: (School, SchoolClass, Subject, String, String, String, String) -> Unit,
-    onEnrollStudent: (School, SchoolClass, String, String, String, String, String, List<String>, String, Boolean) -> Unit,
+    onEnrollStudent: (School, SchoolClass, String, String, String, String, String, List<String>, String, Boolean, String, String, String, String, String) -> Unit,
+    onImportStudentsCsv: (School, SchoolClass, String) -> Unit = { _, _, _ -> },
     onLinkParent: (Student, String) -> Unit,
     onCreateInvitation: (String, String, UserRole, String, School?, String, List<String>, List<String>) -> Unit,
     onSetUserActive: (UserProfile, Boolean) -> Unit,
     onAssignDirector: (School, UserProfile) -> Unit,
-    onApproveAccessRequest: (AccessRequest, UserRole, String, School?) -> Unit = { _, _, _, _ -> },
-    onRejectAccessRequest: (AccessRequest) -> Unit = {},
+    onApproveAccessRequest: (AccessRequest, UserRole, String, School?, List<String>, List<String>, List<String>, String) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onRequestMoreInfoAccessRequest: (AccessRequest, String) -> Unit = { _, _ -> },
+    onRejectAccessRequest: (AccessRequest, String) -> Unit = { _, _ -> },
     onUpdateRegion: (Region, String, String) -> Unit = { _, _, _ -> },
-    onUpdateSchool: (School, Region?, String, String, String, String, String, String, Boolean) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onUpdateSchool: (School, Region?, String, String, String, String, String, String, Boolean, String, String) -> Unit = { _, _, _, _, _, _, _, _, _, _, _ -> },
     onUpdateClass: (SchoolClass, String, String, String) -> Unit = { _, _, _, _ -> },
     onUpdateSubject: (Subject, String, String, Double, String, String) -> Unit = { _, _, _, _, _, _ -> },
     onUpdateScheduleEntry: (ScheduleEntry, Subject?, String, String, String, String) -> Unit = { _, _, _, _, _, _ -> },
-    onUpdateStudent: (Student, SchoolClass?, String, String, String, String, String, Boolean, Boolean) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onUpdateStudent: (Student, SchoolClass?, String, String, String, String, String, Boolean, Boolean, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
     onUpdateInvitation: (RoleInvitation, String, String, String) -> Unit = { _, _, _, _ -> },
     onUpdateUser: (UserProfile, String, UserRole?, School?, Boolean) -> Unit = { _, _, _, _, _ -> }
 ) {
+    val context = LocalContext.current
     val role = profile.roleEnum()
     val tabs = remember(role) {
         when (role) {
@@ -144,6 +155,8 @@ fun AdministrationScreen(
     var linkParentTarget by remember { mutableStateOf<Student?>(null) }
     var assignDirectorSchool by remember { mutableStateOf<School?>(null) }
     var approveRequestTarget by remember { mutableStateOf<AccessRequest?>(null) }
+    var requestInfoTarget by remember { mutableStateOf<AccessRequest?>(null) }
+    var rejectRequestTarget by remember { mutableStateOf<AccessRequest?>(null) }
     var schoolLevelFilter by remember { mutableStateOf(SchoolLevelFilter.ALL) }
     var schoolSearchQuery by remember { mutableStateOf("") }
     var showDirectoryDialog by remember { mutableStateOf(false) }
@@ -156,6 +169,32 @@ fun AdministrationScreen(
     var editingStudent by remember { mutableStateOf<Student?>(null) }
     var editingInvitation by remember { mutableStateOf<RoleInvitation?>(null) }
     var editingUser by remember { mutableStateOf<UserProfile?>(null) }
+    var pendingCsvContent by remember { mutableStateOf<String?>(null) }
+
+    val csvImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val content = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            if (!content.isNullOrBlank()) {
+                pendingCsvContent = content
+            }
+        }
+    }
+
+    val csvExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer ->
+                    writer.write(CsvStudentHelper.exportStudentsToCsv(students))
+                }
+            }
+        }
+    }
 
     val canAddInTab = when (activeTabName) {
         "Régions" -> role == UserRole.ADMIN_NATIONAL
@@ -398,6 +437,8 @@ fun AdministrationScreen(
                             }
                         } else {
                             items(filteredSchools, key = { it.id }) { school ->
+                                val classesCount = remember(classes, school.id) { classes.count { it.schoolId == school.id } }
+                                val studentsCount = remember(students, school.id) { students.count { it.schoolId == school.id } }
                                 ElevatedCard {
                                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         Row(
@@ -422,12 +463,24 @@ fun AdministrationScreen(
                                             }
                                         }
                                         Text("Code : ${school.code} • Région : ${school.regionName}", style = MaterialTheme.typography.bodySmall)
+                                        Text(
+                                            "Classes : $classesCount • Élèves : $studentsCount",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
                                         if (school.sector.isNotBlank() || school.address.isNotBlank()) {
                                             val locationLine = listOf(school.sector, school.address)
                                                 .filter { it.isNotBlank() }
                                                 .distinct()
                                                 .joinToString(" • ")
                                             Text("Secteur / Adresse : $locationLine", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        if (school.phone.isNotBlank() || school.email.isNotBlank()) {
+                                            val contactLine = listOfNotNull(
+                                                school.phone.takeIf { it.isNotBlank() }?.let { "Tél : $it" },
+                                                school.email.takeIf { it.isNotBlank() }?.let { "E-mail : $it" }
+                                            ).joinToString(" • ")
+                                            Text(contactLine, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                         if (school.description.isNotBlank()) {
                                             Text(school.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -493,6 +546,8 @@ fun AdministrationScreen(
                         }
                     } else {
                         items(schools, key = { it.id }) { school ->
+                            val classesCount = remember(classes, school.id) { classes.count { it.schoolId == school.id } }
+                            val studentsCount = remember(students, school.id) { students.count { it.schoolId == school.id } }
                             ElevatedCard {
                                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Row(
@@ -517,8 +572,20 @@ fun AdministrationScreen(
                                         }
                                     }
                                     Text("Code : ${school.code} • Région : ${school.regionName.ifBlank { "Djibouti-Ville" }}", style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        "Classes : $classesCount • Élèves : $studentsCount",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
                                     if (school.address.isNotBlank()) {
                                         Text("Secteur / Adresse : ${school.address}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    if (school.phone.isNotBlank() || school.email.isNotBlank()) {
+                                        val contactLine = listOfNotNull(
+                                            school.phone.takeIf { it.isNotBlank() }?.let { "Tél : $it" },
+                                            school.email.takeIf { it.isNotBlank() }?.let { "E-mail : $it" }
+                                        ).joinToString(" • ")
+                                        Text(contactLine, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                                         Button(
@@ -719,12 +786,41 @@ fun AdministrationScreen(
                 }
 
                 "Élèves", "Élèves & Parents" -> {
+                    if (role == UserRole.DIRECTEUR || role == UserRole.ADMIN_NATIONAL) {
+                        item {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        csvImportLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain"))
+                                    },
+                                    enabled = !isBusy && schools.isNotEmpty() && classes.isNotEmpty(),
+                                    modifier = Modifier.weight(1f).testTag("import_students_csv_button")
+                                ) {
+                                    Icon(Icons.Filled.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.size(6.dp))
+                                    Text("Importer CSV")
+                                }
+                                OutlinedButton(
+                                    onClick = { csvExportLauncher.launch("eleves_ecole_connectee.csv") },
+                                    enabled = students.isNotEmpty(),
+                                    modifier = Modifier.weight(1f).testTag("export_students_csv_button")
+                                ) {
+                                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.size(6.dp))
+                                    Text("Exporter CSV")
+                                }
+                            }
+                        }
+                    }
                     if (students.isEmpty()) {
                         item {
                             EmptyStateCard(
                                 icon = Icons.Filled.Groups,
                                 title = "Aucun élève enregistré.",
-                                subtitle = "Inscrivez les élèves dans leurs classes et associez leurs parents pour activer le suivi en temps réel."
+                                subtitle = "Inscrivez les élèves dans leurs classes ou importez une liste CSV."
                             )
                         }
                     } else {
@@ -755,7 +851,21 @@ fun AdministrationScreen(
                                             }
                                         }
                                     }
-                                    Text("${student.schoolName} • ${student.className}", style = MaterialTheme.typography.bodySmall)
+                                    Text("${student.schoolName} • ${student.className} • Année ${student.academicYear.ifBlank { "2026-2027" }}", style = MaterialTheme.typography.bodySmall)
+                                    if (student.dateOfBirth.isNotBlank() || student.legalGuardianName.isNotBlank()) {
+                                        val guardianSummary = listOfNotNull(
+                                            student.dateOfBirth.takeIf { it.isNotBlank() }?.let { "Né(e) le $it" },
+                                            student.legalGuardianName.takeIf { it.isNotBlank() }?.let {
+                                                val rel = student.legalGuardianRelation.takeIf { r -> r.isNotBlank() }?.let { " ($it)" } ?: ""
+                                                val tel = student.legalGuardianPhone.takeIf { p -> p.isNotBlank() }?.let { " • $it" } ?: ""
+                                                "Resp. : $it$rel$tel"
+                                            }
+                                        ).joinToString(" • ")
+                                        Text(guardianSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    if (student.academicHistory.isNotBlank()) {
+                                        Text("Historique : ${student.academicHistory}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                     Text(
                                         "Parents liés : ${student.parentUids.size} • Notes visibles élève : ${if (student.gradesVisibleToStudent) "Oui" else "Non"}",
                                         style = MaterialTheme.typography.labelSmall,
@@ -777,60 +887,98 @@ fun AdministrationScreen(
                 }
 
                 "Comptes & Invitations" -> {
-                    if (role == UserRole.ADMIN_NATIONAL) {
-                        val pendingRequests = accessRequests.filter { it.status == "pending" }
+                    val actionableStatuses = setOf("pending", "info_requested")
+                    val directorActionable = accessRequests.filter {
+                        it.status in actionableStatuses &&
+                            it.requestedRole in listOf(UserRole.PARENT.key, UserRole.ENSEIGNANT.key, UserRole.ELEVE.key)
+                    }
+                    val nationalActionable = accessRequests.filter {
+                        it.status in actionableStatuses &&
+                            it.requestedRole in listOf(UserRole.DIRECTEUR.key, UserRole.ADMIN_REGIONAL.key, UserRole.ADMIN_NATIONAL.key)
+                    }
+
+                    if (role == UserRole.DIRECTEUR) {
                         item {
-                            Text("Demandes d'inscription en attente", style = MaterialTheme.typography.titleMedium)
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "Demandes à valider par la Direction (${directorActionable.size})",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = "La direction vérifie les comptes Parents et Enseignants rattachés à son établissement avant toute activation.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        if (pendingRequests.isEmpty()) {
+                        if (directorActionable.isEmpty()) {
                             item {
                                 EmptyStateCard(
                                     icon = Icons.Filled.SupervisorAccount,
-                                    title = "Aucune demande d'inscription en attente.",
-                                    subtitle = "Les demandes soumises depuis l'écran d'inscription par rôle apparaîtront ici."
+                                    title = "Aucune demande en attente pour votre établissement.",
+                                    subtitle = "Les demandes d'inscription Parent et Enseignant rattachées à votre école apparaîtront ici."
                                 )
                             }
                         } else {
-                            items(pendingRequests, key = { "req_${it.userId}" }) { req ->
-                                ElevatedCard {
-                                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text(req.fullName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                            Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = MaterialTheme.shapes.small) {
-                                                Text(
-                                                    text = UserRole.fromKey(req.requestedRole).labelFr,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                )
-                                            }
-                                        }
-                                        Text(
-                                            text = req.email + if (req.phone.isNotBlank()) " • ${req.phone}" else "",
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
-                                        if (req.schoolHint.isNotBlank()) {
-                                            Text(
-                                                text = "Établissement / Détails : ${req.schoolHint}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Button(
-                                                onClick = { approveRequestTarget = req },
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Text("Approuver")
-                                            }
-                                            OutlinedButton(
-                                                onClick = { onRejectAccessRequest(req) },
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Text("Refuser")
-                                            }
-                                        }
-                                    }
-                                }
+                            items(directorActionable, key = { "dir_req_${it.userId}" }) { req ->
+                                AccessRequestValidationCard(
+                                    request = req,
+                                    authorityLabel = "Validation Direction d'école",
+                                    onApprove = { approveRequestTarget = req },
+                                    onRequestMoreInfo = { requestInfoTarget = req },
+                                    onReject = { rejectRequestTarget = req }
+                                )
+                            }
+                        }
+                    } else if (role == UserRole.ADMIN_NATIONAL) {
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "Demandes Directions & Admins (${nationalActionable.size})",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = "L'Administration nationale valide les comptes des Directeurs d'école et Administrateurs.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (nationalActionable.isEmpty()) {
+                            item {
+                                EmptyStateCard(
+                                    icon = Icons.Filled.SupervisorAccount,
+                                    title = "Aucune demande Direction / Admin en attente.",
+                                    subtitle = "Les demandes soumises par les directeurs ou administrateurs apparaîtront ici."
+                                )
+                            }
+                        } else {
+                            items(nationalActionable, key = { "nat_req_${it.userId}" }) { req ->
+                                AccessRequestValidationCard(
+                                    request = req,
+                                    authorityLabel = "Validation Administration nationale",
+                                    onApprove = { approveRequestTarget = req },
+                                    onRequestMoreInfo = { requestInfoTarget = req },
+                                    onReject = { rejectRequestTarget = req }
+                                )
+                            }
+                        }
+
+                        if (directorActionable.isNotEmpty()) {
+                            item {
+                                Text(
+                                    text = "Suivi national — Parents & Enseignants (${directorActionable.size})",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                            }
+                            items(directorActionable, key = { "nat_sub_req_${it.userId}" }) { req ->
+                                AccessRequestValidationCard(
+                                    request = req,
+                                    authorityLabel = "Autorité : Direction d'école",
+                                    onApprove = { approveRequestTarget = req },
+                                    onRequestMoreInfo = { requestInfoTarget = req },
+                                    onReject = { rejectRequestTarget = req }
+                                )
                             }
                         }
                     }
@@ -962,9 +1110,9 @@ fun AdministrationScreen(
         CreateSchoolDialog(
             regions = regions,
             onDismiss = { showSchoolDialog = false },
-            onSubmit = { region, name, code, type, address ->
+            onSubmit = { region, name, code, type, address, phone, email ->
                 if (region != null) {
-                    onCreateSchool(region, name, code, type, address)
+                    onCreateSchool(region, name, code, type, address, phone, email)
                 }
                 showSchoolDialog = false
             }
@@ -976,8 +1124,8 @@ fun AdministrationScreen(
             regions = regions,
             defaultNameHint = profile.schoolName,
             onDismiss = { showDirectorSchoolDialog = false },
-            onSubmit = { region, name, code, type, address, officialId ->
-                onSetupDirectorSchool(region, name, code, type, address, officialId)
+            onSubmit = { region, name, code, type, address, officialId, phone, email ->
+                onSetupDirectorSchool(region, name, code, type, address, officialId, phone, email)
                 showDirectorSchoolDialog = false
             }
         )
@@ -1031,8 +1179,8 @@ fun AdministrationScreen(
             classes = classes,
             managedUsers = managedUsers,
             onDismiss = { showEnrollStudentDialog = false },
-            onSubmit = { school, sc, first, last, mat, dob, gender, parents, stuUid, visible ->
-                onEnrollStudent(school, sc, first, last, mat, dob, gender, parents, stuUid, visible)
+            onSubmit = { school, sc, first, last, mat, dob, gender, parents, stuUid, visible, year, gName, gPhone, gRel, history ->
+                onEnrollStudent(school, sc, first, last, mat, dob, gender, parents, stuUid, visible, year, gName, gPhone, gRel, history)
                 showEnrollStudentDialog = false
             }
         )
@@ -1084,13 +1232,46 @@ fun AdministrationScreen(
     if (approveRequestTarget != null) {
         val targetReq = approveRequestTarget!!
         ApproveAccessRequestDialog(
+            actorRole = role,
+            actorSchoolId = profile.schoolId,
             request = targetReq,
             regions = regions,
             schools = schools,
+            classes = classes,
+            subjects = subjects,
+            students = students,
+            onNavigateToTab = { tabName ->
+                val idx = tabs.indexOfFirst { it.equals(tabName, ignoreCase = true) || it.startsWith(tabName.substringBefore(" ")) }
+                if (idx >= 0) selectedTabIndex = idx
+            },
             onDismiss = { approveRequestTarget = null },
-            onSubmit = { assignedRole, regionId, school ->
-                onApproveAccessRequest(targetReq, assignedRole, regionId, school)
+            onSubmit = { assignedRole, regionId, school, studentIds, classIds, subjectIds, decisionNote ->
+                onApproveAccessRequest(targetReq, assignedRole, regionId, school, studentIds, classIds, subjectIds, decisionNote)
                 approveRequestTarget = null
+            }
+        )
+    }
+
+    if (requestInfoTarget != null) {
+        val targetReq = requestInfoTarget!!
+        RequestMoreInfoDialog(
+            request = targetReq,
+            onDismiss = { requestInfoTarget = null },
+            onSubmit = { note ->
+                onRequestMoreInfoAccessRequest(targetReq, note)
+                requestInfoTarget = null
+            }
+        )
+    }
+
+    if (rejectRequestTarget != null) {
+        val targetReq = rejectRequestTarget!!
+        RejectAccessRequestDialog(
+            request = targetReq,
+            onDismiss = { rejectRequestTarget = null },
+            onSubmit = { reason ->
+                onRejectAccessRequest(targetReq, reason)
+                rejectRequestTarget = null
             }
         )
     }
@@ -1120,8 +1301,8 @@ fun AdministrationScreen(
             school = target,
             regions = regions,
             onDismiss = { editingSchool = null },
-            onSubmit = { reg, name, code, type, address, sector, description, isActive ->
-                onUpdateSchool(target, reg, name, code, type, address, sector, description, isActive)
+            onSubmit = { reg, name, code, type, address, sector, description, isActive, phone, email ->
+                onUpdateSchool(target, reg, name, code, type, address, sector, description, isActive, phone, email)
                 editingSchool = null
             }
         )
@@ -1171,8 +1352,8 @@ fun AdministrationScreen(
             student = target,
             classes = classes,
             onDismiss = { editingStudent = null },
-            onSubmit = { targetClass, first, last, mat, dob, gender, visible, isActive ->
-                onUpdateStudent(target, targetClass, first, last, mat, dob, gender, visible, isActive)
+            onSubmit = { targetClass, first, last, mat, dob, gender, visible, isActive, year, gName, gPhone, gRel, history ->
+                onUpdateStudent(target, targetClass, first, last, mat, dob, gender, visible, isActive, year, gName, gPhone, gRel, history)
                 editingStudent = null
             }
         )
@@ -1200,6 +1381,20 @@ fun AdministrationScreen(
             onSubmit = { fullName, newRole, newSchool, isActive ->
                 onUpdateUser(target, fullName, newRole, newSchool, isActive)
                 editingUser = null
+            }
+        )
+    }
+
+    if (pendingCsvContent != null) {
+        val csvText = pendingCsvContent!!
+        CsvImportConfirmDialog(
+            csvContent = csvText,
+            schools = schools,
+            classes = classes,
+            onDismiss = { pendingCsvContent = null },
+            onConfirm = { school, fallbackClass ->
+                onImportStudentsCsv(school, fallbackClass, csvText)
+                pendingCsvContent = null
             }
         )
     }
@@ -1266,13 +1461,15 @@ private fun CreateRegionDialog(onDismiss: () -> Unit, onSubmit: (String, String)
 private fun CreateSchoolDialog(
     regions: List<Region>,
     onDismiss: () -> Unit,
-    onSubmit: (Region?, String, String, String, String) -> Unit
+    onSubmit: (Region?, String, String, String, String, String, String) -> Unit
 ) {
     var selectedRegion by remember(regions) { mutableStateOf(regions.firstOrNull()) }
     var name by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("primaire") }
     var address by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
     var showCatalogPrefill by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -1291,11 +1488,13 @@ private fun CreateSchoolDialog(
                 OutlinedTextField(value = code, onValueChange = { code = it }, label = { Text("Code officiel *") }, modifier = Modifier.fillMaxWidth())
                 DropdownSelector("Type", listOf("primaire", "college", "lycee"), type, { it.replaceFirstChar { c -> c.uppercase() } }, { type = it })
                 OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Adresse / Quartier") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Téléphone") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("E-mail") }, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {
             Button(
-                onClick = { selectedRegion?.let { onSubmit(it, name, code, type, address) } },
+                onClick = { selectedRegion?.let { onSubmit(it, name, code, type, address, phone, email) } },
                 enabled = selectedRegion != null && name.trim().length >= 2 && code.isNotBlank()
             ) { Text("Enregistrer") }
         },
@@ -1322,7 +1521,7 @@ private fun CreateDirectorSchoolDialog(
     regions: List<Region>,
     defaultNameHint: String = "",
     onDismiss: () -> Unit,
-    onSubmit: (Region?, String, String, String, String, String) -> Unit
+    onSubmit: (Region?, String, String, String, String, String, String, String) -> Unit
 ) {
     var selectedRegion by remember(regions) {
         mutableStateOf(
@@ -1334,6 +1533,8 @@ private fun CreateDirectorSchoolDialog(
     var code by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("primaire") }
     var address by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
     var officialSchoolId by remember { mutableStateOf("") }
     var showCatalogPrefill by remember { mutableStateOf(false) }
 
@@ -1386,11 +1587,23 @@ private fun CreateDirectorSchoolDialog(
                     label = { Text("Adresse / Quartier") },
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(
+                    value = phone,
+                    onValueChange = { phone = it },
+                    label = { Text("Téléphone") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("E-mail") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSubmit(selectedRegion, name, code, type, address, officialSchoolId) },
+                onClick = { onSubmit(selectedRegion, name, code, type, address, officialSchoolId, phone, email) },
                 enabled = name.trim().length >= 2 && code.isNotBlank(),
                 modifier = Modifier.testTag("director_school_submit_button")
             ) { Text("Enregistrer") }
@@ -1565,7 +1778,7 @@ private fun EnrollStudentDialog(
     classes: List<SchoolClass>,
     managedUsers: List<UserProfile>,
     onDismiss: () -> Unit,
-    onSubmit: (School, SchoolClass, String, String, String, String, String, List<String>, String, Boolean) -> Unit
+    onSubmit: (School, SchoolClass, String, String, String, String, String, List<String>, String, Boolean, String, String, String, String, String) -> Unit
 ) {
     var selectedClass by remember { mutableStateOf(classes.firstOrNull()) }
     var firstName by remember { mutableStateOf("") }
@@ -1573,6 +1786,11 @@ private fun EnrollStudentDialog(
     var matricule by remember { mutableStateOf("") }
     var dob by remember { mutableStateOf("") }
     var gender by remember { mutableStateOf("M") }
+    var academicYear by remember { mutableStateOf("2026-2027") }
+    var guardianName by remember { mutableStateOf("") }
+    var guardianPhone by remember { mutableStateOf("") }
+    var guardianRelation by remember { mutableStateOf("") }
+    var academicHistory by remember { mutableStateOf("") }
     val parents = remember(managedUsers) { managedUsers.filter { it.roleEnum() == UserRole.PARENT } }
     val studentUsers = remember(managedUsers) { managedUsers.filter { it.roleEnum() == UserRole.ELEVE } }
     var selectedParent by remember { mutableStateOf<UserProfile?>(null) }
@@ -1590,6 +1808,11 @@ private fun EnrollStudentDialog(
                 OutlinedTextField(value = matricule, onValueChange = { matricule = it }, label = { Text("Matricule *") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = dob, onValueChange = { dob = it }, label = { Text("Date de naissance (AAAA-MM-JJ)") }, modifier = Modifier.fillMaxWidth())
                 DropdownSelector("Genre", listOf("M", "F"), gender, { if (it == "M") "Masculin" else "Féminin" }, { gender = it })
+                OutlinedTextField(value = academicYear, onValueChange = { academicYear = it }, label = { Text("Année scolaire") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = guardianName, onValueChange = { guardianName = it }, label = { Text("Responsable légal (nom)") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = guardianPhone, onValueChange = { guardianPhone = it }, label = { Text("Téléphone du responsable") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = guardianRelation, onValueChange = { guardianRelation = it }, label = { Text("Lien de parenté") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = academicHistory, onValueChange = { academicHistory = it }, label = { Text("Historique scolaire") }, modifier = Modifier.fillMaxWidth())
                 if (parents.isNotEmpty()) {
                     DropdownSelector("Compte parent (optionnel)", parents, selectedParent, { it.fullName }, { selectedParent = it })
                 }
@@ -1609,12 +1832,74 @@ private fun EnrollStudentDialog(
                     val school = schools.firstOrNull { it.id == sc.schoolId } ?: return@Button
                     onSubmit(
                         school, sc, firstName, lastName, matricule, dob, gender,
-                        listOfNotNull(selectedParent?.userId), selectedStudentAccount?.userId ?: "", gradesVisible
+                        listOfNotNull(selectedParent?.userId), selectedStudentAccount?.userId ?: "", gradesVisible,
+                        academicYear, guardianName, guardianPhone, guardianRelation, academicHistory
                     )
                 },
                 enabled = selectedClass != null && schools.any { it.id == selectedClass?.schoolId } &&
                     firstName.isNotBlank() && lastName.isNotBlank() && matricule.isNotBlank()
             ) { Text("Inscrire") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
+    )
+}
+
+@Composable
+private fun CsvImportConfirmDialog(
+    csvContent: String,
+    schools: List<School>,
+    classes: List<SchoolClass>,
+    onDismiss: () -> Unit,
+    onConfirm: (School, SchoolClass) -> Unit
+) {
+    val parsedRows = remember(csvContent) { CsvStudentHelper.parseStudentsFromCsv(csvContent) }
+    var selectedSchool by remember(schools) { mutableStateOf(schools.firstOrNull()) }
+    val schoolClasses = remember(classes, selectedSchool) {
+        classes.filter { selectedSchool == null || it.schoolId == selectedSchool!!.id }
+    }
+    var fallbackClass by remember(schoolClasses) { mutableStateOf(schoolClasses.firstOrNull()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Importer des élèves (CSV)") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "${parsedRows.size} élève(s) valide(s) détecté(s) dans le fichier.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (schools.size > 1) {
+                    DropdownSelector(
+                        label = "Établissement cible",
+                        options = schools,
+                        selectedOption = selectedSchool,
+                        optionLabel = { it.name },
+                        onOptionSelected = { selectedSchool = it }
+                    )
+                }
+                DropdownSelector(
+                    label = "Classe par défaut (si colonne classe absente)",
+                    options = schoolClasses,
+                    selectedOption = fallbackClass,
+                    optionLabel = { "${it.name} (${it.level})" },
+                    onOptionSelected = { fallbackClass = it },
+                    emptyLabel = "Aucune classe"
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val s = selectedSchool
+                    val c = fallbackClass
+                    if (s != null && c != null) onConfirm(s, c)
+                },
+                enabled = parsedRows.isNotEmpty() && selectedSchool != null && fallbackClass != null,
+                modifier = Modifier.testTag("confirm_csv_import_button")
+            ) {
+                Text("Importer (${parsedRows.size})")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
     )
@@ -1679,7 +1964,9 @@ private fun CreateInvitationDialog(
                         phone, listOfNotNull(selectedStudent?.id), listOfNotNull(selectedClass?.id)
                     )
                 },
-                enabled = email.contains("@") && fullName.trim().length >= 2
+                enabled = email.contains("@") &&
+                    fullName.trim().length >= 2 &&
+                    ((selectedRole != UserRole.DIRECTEUR && selectedRole != UserRole.ENSEIGNANT) || selectedSchool != null)
             ) { Text("Envoyer l'invitation") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
@@ -1751,23 +2038,206 @@ private fun AssignDirectorDialog(
 }
 
 @Composable
+internal fun AccessRequestValidationCard(
+    request: AccessRequest,
+    authorityLabel: String,
+    onApprove: () -> Unit,
+    onRequestMoreInfo: () -> Unit,
+    onReject: () -> Unit
+) {
+    ElevatedCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = request.fullName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Surface(
+                        color = if (request.status == "info_requested") {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        },
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            text = if (request.status == "info_requested") "Infos demandées" else "En attente",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            text = UserRole.fromKey(request.requestedRole).labelFr,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+            Text(
+                text = authorityLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = request.email + if (request.phone.isNotBlank()) " • ${request.phone}" else "",
+                style = MaterialTheme.typography.bodySmall
+            )
+            val schoolDisplay = request.schoolName.ifBlank { request.schoolHint }
+            if (schoolDisplay.isNotBlank()) {
+                Text(
+                    text = "Établissement demandé : $schoolDisplay",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (request.extraDetails.isNotBlank()) {
+                Text(
+                    text = "Précisions : ${request.extraDetails}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (request.applicantResponse.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Réponse du demandeur : ${request.applicantResponse}",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+            }
+            if (request.decisionNote.isNotBlank()) {
+                Text(
+                    text = "Dernière remarque : ${request.decisionNote}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = onApprove,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("approve_request_${request.userId}")
+                ) {
+                    Text("Approuver")
+                }
+                OutlinedButton(
+                    onClick = onRequestMoreInfo,
+                    modifier = Modifier.testTag("request_info_${request.userId}")
+                ) {
+                    Text("Infos")
+                }
+                OutlinedButton(
+                    onClick = onReject,
+                    modifier = Modifier.testTag("reject_request_${request.userId}")
+                ) {
+                    Text("Refuser")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 internal fun ApproveAccessRequestDialog(
+    actorRole: UserRole = UserRole.ADMIN_NATIONAL,
+    actorSchoolId: String = "",
     request: AccessRequest,
     regions: List<Region>,
     schools: List<School>,
+    classes: List<SchoolClass> = emptyList(),
+    subjects: List<Subject> = emptyList(),
+    students: List<Student> = emptyList(),
+    onNavigateToTab: ((String) -> Unit)? = null,
     onDismiss: () -> Unit,
-    onSubmit: (UserRole, String, School?) -> Unit
+    onSubmit: (UserRole, String, School?, List<String>, List<String>, List<String>, String) -> Unit
 ) {
-    var assignedRole by remember { mutableStateOf(UserRole.fromKey(request.requestedRole)) }
-    val matchedSchool = remember(request.schoolHint, schools) {
-        if (request.schoolHint.isBlank()) schools.firstOrNull()
-        else schools.firstOrNull { request.schoolHint.contains(it.name, ignoreCase = true) }
-            ?: schools.firstOrNull { it.name.contains(request.schoolHint.substringBefore("(").trim(), ignoreCase = true) }
-            ?: schools.firstOrNull()
+    val allowedRoles = remember(actorRole) {
+        if (actorRole == UserRole.DIRECTEUR) {
+            listOf(UserRole.PARENT, UserRole.ENSEIGNANT, UserRole.ELEVE)
+        } else {
+            listOf(
+                UserRole.DIRECTEUR,
+                UserRole.ADMIN_REGIONAL,
+                UserRole.ENSEIGNANT,
+                UserRole.PARENT,
+                UserRole.ELEVE,
+                UserRole.ADMIN_NATIONAL
+            )
+        }
+    }
+    var assignedRole by remember(request.userId, actorRole) {
+        val reqRole = UserRole.fromKey(request.requestedRole)
+        mutableStateOf(if (reqRole in allowedRoles) reqRole else allowedRoles.first())
+    }
+    val matchedSchool = remember(request.schoolId, request.schoolName, request.schoolHint, schools, actorRole, actorSchoolId) {
+        if (actorRole == UserRole.DIRECTEUR && actorSchoolId.isNotBlank()) {
+            schools.firstOrNull { it.id == actorSchoolId } ?: schools.firstOrNull()
+        } else {
+            schools.firstOrNull { request.schoolId.isNotBlank() && it.id == request.schoolId }
+                ?: schools.firstOrNull { request.schoolName.isNotBlank() && it.name.equals(request.schoolName, ignoreCase = true) }
+                ?: schools.firstOrNull { request.schoolHint.isNotBlank() && request.schoolHint.contains(it.name, ignoreCase = true) }
+                ?: schools.firstOrNull {
+                    val cleanHint = request.schoolHint.substringBefore("(").trim()
+                    cleanHint.isNotBlank() && it.name.contains(cleanHint, ignoreCase = true)
+                }
+                ?: schools.firstOrNull()
+        }
     }
     var selectedSchool by remember(matchedSchool) { mutableStateOf(matchedSchool) }
     var selectedRegion by remember(regions, matchedSchool) {
         mutableStateOf(regions.firstOrNull { it.id == matchedSchool?.regionId } ?: regions.firstOrNull())
+    }
+    var selectedStudentIds by remember(selectedSchool?.id, assignedRole) { mutableStateOf(emptySet<String>()) }
+    var selectedClassIds by remember(selectedSchool?.id, assignedRole) { mutableStateOf(emptySet<String>()) }
+    var selectedSubjectIds by remember(selectedSchool?.id, assignedRole) { mutableStateOf(emptySet<String>()) }
+    var decisionNote by remember { mutableStateOf("") }
+
+    val schoolStudents = remember(students, selectedSchool) {
+        students.filter { selectedSchool == null || it.schoolId == selectedSchool?.id }
+    }
+    val schoolClasses = remember(classes, selectedSchool) {
+        classes.filter { selectedSchool == null || it.schoolId == selectedSchool?.id }
+    }
+    val candidateSubjects = remember(subjects, selectedSchool, selectedClassIds) {
+        subjects.filter {
+            (selectedSchool == null || it.schoolId == selectedSchool?.id) &&
+                (selectedClassIds.isEmpty() || it.classId in selectedClassIds)
+        }
+    }
+
+    val schoolRequired = assignedRole == UserRole.DIRECTEUR ||
+        assignedRole == UserRole.ENSEIGNANT ||
+        assignedRole == UserRole.PARENT ||
+        assignedRole == UserRole.ELEVE
+    val linkagesValid = when (assignedRole) {
+        UserRole.DIRECTEUR -> selectedSchool != null
+        UserRole.ENSEIGNANT -> selectedSchool != null && selectedClassIds.isNotEmpty()
+        UserRole.PARENT -> selectedSchool != null && selectedStudentIds.isNotEmpty()
+        UserRole.ELEVE -> selectedSchool != null
+        else -> true
     }
 
     AlertDialog(
@@ -1779,33 +2249,29 @@ internal fun ApproveAccessRequestDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "E-mail : ${request.email}",
+                    text = "E-mail : ${request.email}" + if (request.phone.isNotBlank()) " • ${request.phone}" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (request.schoolHint.isNotBlank()) {
+                val hintSummary = listOf(request.schoolName.ifBlank { request.schoolHint }, request.extraDetails)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" — ")
+                if (hintSummary.isNotBlank()) {
                     Text(
-                        text = "Rattachement indiqué : ${request.schoolHint}",
+                        text = "Informations déclarées : $hintSummary",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
                 DropdownSelector(
-                    label = "Rôle attribué",
-                    options = listOf(
-                        UserRole.DIRECTEUR,
-                        UserRole.ENSEIGNANT,
-                        UserRole.PARENT,
-                        UserRole.ADMIN_REGIONAL,
-                        UserRole.ELEVE,
-                        UserRole.ADMIN_NATIONAL
-                    ),
+                    label = "Rôle attribué *",
+                    options = allowedRoles,
                     selectedOption = assignedRole,
                     optionLabel = { it.labelFr },
                     onOptionSelected = { assignedRole = it }
                 )
                 if (assignedRole == UserRole.ADMIN_REGIONAL) {
                     DropdownSelector(
-                        label = "Région",
+                        label = "Région *",
                         options = regions,
                         selectedOption = selectedRegion,
                         optionLabel = { it.name },
@@ -1813,26 +2279,264 @@ internal fun ApproveAccessRequestDialog(
                         emptyLabel = "Aucune région enregistrée"
                     )
                 }
-                if (assignedRole == UserRole.DIRECTEUR || assignedRole == UserRole.ENSEIGNANT || assignedRole == UserRole.PARENT || assignedRole == UserRole.ELEVE) {
-                    DropdownSelector(
-                        label = "Établissement de rattachement",
-                        options = schools,
-                        selectedOption = selectedSchool,
-                        optionLabel = { it.name },
-                        onOptionSelected = { selectedSchool = it },
-                        emptyLabel = "Aucun établissement enregistré (optionnel)"
-                    )
+                if (schoolRequired) {
+                    if (actorRole == UserRole.DIRECTEUR && selectedSchool != null) {
+                        Text(
+                            text = "Établissement de rattachement : ${selectedSchool?.name}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                    } else {
+                        DropdownSelector(
+                            label = "Établissement autorisé *",
+                            options = schools,
+                            selectedOption = selectedSchool,
+                            optionLabel = { it.name },
+                            onOptionSelected = { selectedSchool = it },
+                            emptyLabel = "Aucun établissement autorisé enregistré"
+                        )
+                    }
                 }
+
+                if (assignedRole == UserRole.PARENT) {
+                    Text(
+                        text = "Enfant(s) rattaché(s) *",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (schoolStudents.isEmpty()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Aucun élève inscrit dans cet établissement. Inscrivez d'abord l'élève avant d'activer un parent.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                if (onNavigateToTab != null) {
+                                    OutlinedButton(onClick = {
+                                        onDismiss()
+                                        onNavigateToTab("Élèves")
+                                    }) {
+                                        Text("Aller inscrire un élève")
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        schoolStudents.forEach { stu ->
+                            val checked = stu.id in selectedStudentIds
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = { isChecked ->
+                                        selectedStudentIds = if (isChecked) selectedStudentIds + stu.id else selectedStudentIds - stu.id
+                                    },
+                                    modifier = Modifier.testTag("approve_link_student_${stu.id}")
+                                )
+                                Text(
+                                    text = "${stu.fullName} (${stu.className} • ${stu.matricule})",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (assignedRole == UserRole.ENSEIGNANT) {
+                    Text(
+                        text = "Classe(s) assignée(s) *",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (schoolClasses.isEmpty()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Aucune classe trouvée dans cet établissement. Créez d'abord au moins une classe avant d'activer un enseignant.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                if (onNavigateToTab != null) {
+                                    OutlinedButton(onClick = {
+                                        onDismiss()
+                                        onNavigateToTab("Classes")
+                                    }) {
+                                        Text("Aller créer une classe")
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        schoolClasses.forEach { cls ->
+                            val checked = cls.id in selectedClassIds
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = { isChecked ->
+                                        selectedClassIds = if (isChecked) selectedClassIds + cls.id else selectedClassIds - cls.id
+                                    },
+                                    modifier = Modifier.testTag("approve_link_class_${cls.id}")
+                                )
+                                Text(
+                                    text = "${cls.name} (${cls.level})",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+
+                    if (candidateSubjects.isNotEmpty()) {
+                        Text(
+                            text = "Matière(s) attribuée(s)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        candidateSubjects.forEach { subj ->
+                            val checked = subj.id in selectedSubjectIds
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = { isChecked ->
+                                        selectedSubjectIds = if (isChecked) selectedSubjectIds + subj.id else selectedSubjectIds - subj.id
+                                    },
+                                    modifier = Modifier.testTag("approve_link_subject_${subj.id}")
+                                )
+                                Text(
+                                    text = "${subj.name} (${subj.className})",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = decisionNote,
+                    onValueChange = { decisionNote = it.take(300) },
+                    label = { Text("Note d'approbation (optionnel)") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("approve_decision_note_input")
+                )
             }
         },
         confirmButton = {
             Button(
                 onClick = {
                     val regId = selectedSchool?.regionId ?: selectedRegion?.id ?: ""
-                    onSubmit(assignedRole, regId, selectedSchool)
-                }
+                    onSubmit(
+                        assignedRole,
+                        regId,
+                        if (assignedRole == UserRole.ADMIN_REGIONAL || assignedRole == UserRole.ADMIN_NATIONAL) null else selectedSchool,
+                        selectedStudentIds.toList(),
+                        selectedClassIds.toList(),
+                        selectedSubjectIds.toList(),
+                        decisionNote.trim()
+                    )
+                },
+                enabled = linkagesValid,
+                modifier = Modifier.testTag("confirm_approve_request_button")
             ) {
-                Text("Valider et créer l'accès")
+                Text("Valider et activer l'accès")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
+    )
+}
+
+@Composable
+internal fun RequestMoreInfoDialog(
+    request: AccessRequest,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit
+) {
+    var note by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Demander des informations à ${request.fullName}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Précisez les éléments ou justificatifs attendus (classe de l'enfant, matière, attestation, etc.). Le demandeur pourra modifier et renvoyer sa demande.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it.take(500) },
+                    label = { Text("Informations complémentaires attendues *") },
+                    minLines = 2,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("request_info_note_input")
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmit(note.trim()) },
+                enabled = note.trim().length >= 3,
+                modifier = Modifier.testTag("confirm_request_info_button")
+            ) {
+                Text("Envoyer la demande")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }
+    )
+}
+
+@Composable
+internal fun RejectAccessRequestDialog(
+    request: AccessRequest,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit
+) {
+    var reason by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Refuser la demande de ${request.fullName}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Indiquez le motif du refus qui sera affiché au demandeur.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it.take(500) },
+                    label = { Text("Motif du refus *") },
+                    minLines = 2,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("reject_reason_input")
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmit(reason.trim()) },
+                enabled = reason.trim().length >= 3,
+                modifier = Modifier.testTag("confirm_reject_request_button")
+            ) {
+                Text("Confirmer le refus")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } }

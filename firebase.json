@@ -5,6 +5,17 @@
       "rules": "firestore.rules"
     }
   ],
+  "functions": {
+    "source": "functions"
+  },
+  "hosting": {
+    "public": "web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ]
+  },
   "emulators": {
     "firestore": {
       "host": "127.0.0.1",

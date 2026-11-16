@@ -8,19 +8,23 @@ import com.example.data.model.Announcement
 import com.example.data.model.AssessmentGrade
 import com.example.data.model.AttendanceRecord
 import com.example.data.model.AuditLog
+import com.example.data.model.ConnectedDeviceSession
 import com.example.data.model.DifficultyAlert
 import com.example.data.model.LessonEntry
 import com.example.data.model.Message
 import com.example.data.model.NotificationItem
 import com.example.data.model.PlatformSettings
+import com.example.data.model.QrPairingRequest
 import com.example.data.model.Region
 import com.example.data.model.ReportCard
 import com.example.data.model.RoleInvitation
 import com.example.data.model.ScheduleEntry
 import com.example.data.model.School
 import com.example.data.model.SchoolClass
+import com.example.data.model.SchoolDirectoryEntry
 import com.example.data.model.Student
 import com.example.data.model.Subject
+import com.example.data.model.TeacherAttendanceRecord
 import com.example.data.model.UserPrivateContact
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
@@ -28,6 +32,8 @@ import com.example.data.repository.AcademicRepository
 import com.example.data.repository.AdminRepository
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.CommunicationRepository
+import com.example.data.repository.ConnectedDevicesRepository
+import com.example.util.CsvStudentHelper
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -67,6 +73,7 @@ enum class AppSection(val labelFr: String) {
     ADMINISTRATION("Établissements & Classes"),
     MESSAGERIE("Messagerie & Annonces"),
     NOTIFICATIONS("Notifications & Audit"),
+    APPAREILS_CONNECTES("Appareils connectés"),
     A_PROPOS("À propos de nous")
 }
 
@@ -83,6 +90,7 @@ class AppViewModel(
     private val adminRepo = AdminRepository(db, auth)
     private val academicRepo = AcademicRepository(db, auth)
     private val commRepo = CommunicationRepository(db, auth)
+    private val connectedDevicesRepo = ConnectedDevicesRepository(db, auth)
 
     private val _selectedSection = MutableStateFlow(AppSection.TABLEAU_DE_BORD)
     val selectedSection: StateFlow<AppSection> = _selectedSection.asStateFlow()
@@ -101,6 +109,12 @@ class AppViewModel(
 
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
+
+    private val _pendingQrInspection = MutableStateFlow<QrPairingRequest?>(null)
+    val pendingQrInspection: StateFlow<QrPairingRequest?> = _pendingQrInspection.asStateFlow()
+
+    private val _qrInspectionLoading = MutableStateFlow(false)
+    val qrInspectionLoading: StateFlow<Boolean> = _qrInspectionLoading.asStateFlow()
 
     private val _onboardingBootstrapAvailable = MutableStateFlow(false)
     private val _invitationRefreshTrigger = MutableStateFlow(0)
@@ -156,6 +170,11 @@ class AppViewModel(
         .catch { emit(null) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
+    val schoolDirectory: StateFlow<List<SchoolDirectoryEntry>> = safeListFlow(
+        authRepo.observeSchoolDirectory(),
+        "schoolDirectory"
+    )
+
     val platformSettings: StateFlow<PlatformSettings?> = userProfile
         .flatMapLatest { profile ->
             if (profile != null && profile.isActive) authRepo.observePlatformSettings()
@@ -208,6 +227,7 @@ class AppViewModel(
     val lessons: StateFlow<List<LessonEntry>> = safeListFlow(activeProfileFlow { academicRepo.observeLessons(it) }, "lessons")
     val assessments: StateFlow<List<AssessmentGrade>> = safeListFlow(activeProfileFlow { academicRepo.observeAssessments(it) }, "assessments")
     val attendance: StateFlow<List<AttendanceRecord>> = safeListFlow(activeProfileFlow { academicRepo.observeAttendance(it) }, "attendance")
+    val teacherAttendance: StateFlow<List<TeacherAttendanceRecord>> = safeListFlow(activeProfileFlow { academicRepo.observeTeacherAttendance(it) }, "teacherAttendance")
     val difficulties: StateFlow<List<DifficultyAlert>> = safeListFlow(activeProfileFlow { academicRepo.observeDifficulties(it) }, "difficulties")
     val reportCards: StateFlow<List<ReportCard>> = safeListFlow(activeProfileFlow { academicRepo.observeReportCards(it) }, "reportCards")
     val invitations: StateFlow<List<RoleInvitation>> = safeListFlow(activeProfileFlow { adminRepo.observeInvitations(it) }, "invitations")
@@ -223,6 +243,13 @@ class AppViewModel(
         userProfile.flatMapLatest { p -> if (p != null && p.isActive && p.consentAccepted) commRepo.observeNotifications(p.userId) else flowOf(emptyList()) },
         "notifications"
     )
+    val connectedDevices: StateFlow<List<ConnectedDeviceSession>> = safeListFlow(
+        userProfile.flatMapLatest { p ->
+            if (p != null && p.isActive && p.consentAccepted) connectedDevicesRepo.observeConnectedDevices(p.userId)
+            else flowOf(emptyList())
+        },
+        "connectedDevices"
+    )
 
     fun selectSection(section: AppSection) {
         _selectedSection.value = section
@@ -230,6 +257,11 @@ class AppViewModel(
 
     fun openAdminApprovals() {
         _targetAdminTabName.value = "Comptes & Invitations"
+        _selectedSection.value = AppSection.ADMINISTRATION
+    }
+
+    fun openAdminTab(tabName: String) {
+        _targetAdminTabName.value = tabName
         _selectedSection.value = AppSection.ADMINISTRATION
     }
 
@@ -290,14 +322,62 @@ class AppViewModel(
         }
     }
 
-    fun submitAccessRequest(fullName: String, role: UserRole, schoolHint: String, phone: String) {
-        runAction("Demande d'habilitation transmise à l'administration.") {
+    fun submitAccessRequest(
+        firstName: String,
+        lastName: String,
+        role: UserRole,
+        schoolId: String,
+        schoolName: String,
+        schoolHint: String,
+        extraDetails: String,
+        phone: String
+    ) {
+        val composedName = listOf(firstName.trim(), lastName.trim())
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        runAction("Demande d'habilitation transmise (statut : en attente de validation).") {
             authRepo.submitAccessRequest(
                 uid = currentUserId,
-                fullName = fullName.ifBlank { currentUserDisplayName },
+                fullName = composedName.ifBlank { currentUserDisplayName },
                 email = currentUserEmail,
                 requestedRole = role,
                 schoolHint = schoolHint,
+                phone = phone,
+                firstName = firstName,
+                lastName = lastName,
+                schoolId = schoolId,
+                schoolName = schoolName,
+                extraDetails = extraDetails
+            )
+        }
+    }
+
+    fun resubmitAccessRequest(
+        firstName: String,
+        lastName: String,
+        role: UserRole,
+        schoolId: String,
+        schoolName: String,
+        schoolHint: String,
+        extraDetails: String,
+        applicantResponse: String,
+        phone: String
+    ) {
+        val composedName = listOf(firstName.trim(), lastName.trim())
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        runAction("Compléments transmis à l'autorité compétente.") {
+            authRepo.resubmitAccessRequest(
+                uid = currentUserId,
+                firstName = firstName,
+                lastName = lastName,
+                fullName = composedName.ifBlank { currentUserDisplayName },
+                requestedRole = role,
+                schoolId = schoolId,
+                schoolName = schoolName,
+                schoolHint = schoolHint,
+                extraDetails = extraDetails,
+                applicantResponse = applicantResponse,
                 phone = phone
             )
         }
@@ -335,10 +415,18 @@ class AppViewModel(
         }
     }
 
-    fun createSchool(region: Region, name: String, code: String, schoolType: String, address: String) {
+    fun createSchool(
+        region: Region,
+        name: String,
+        code: String,
+        schoolType: String,
+        address: String,
+        phone: String = "",
+        email: String = ""
+    ) {
         val actor = userProfile.value ?: return
         runAction("Établissement « $name » enregistré.") {
-            adminRepo.createSchool(actor, region, name, code, schoolType, address)
+            adminRepo.createSchool(actor, region, name, code, schoolType, address, phone, email)
         }
     }
 
@@ -348,7 +436,9 @@ class AppViewModel(
         code: String,
         schoolType: String,
         address: String,
-        officialSchoolId: String = ""
+        officialSchoolId: String = "",
+        phone: String = "",
+        email: String = ""
     ) {
         val actor = userProfile.value ?: return
         runAction("Établissement « $name » configuré pour votre direction.") {
@@ -359,7 +449,9 @@ class AppViewModel(
                 code = code,
                 schoolType = schoolType,
                 address = address,
-                officialSchoolId = officialSchoolId
+                officialSchoolId = officialSchoolId,
+                phone = phone,
+                email = email
             )
         }
     }
@@ -430,14 +522,53 @@ class AppViewModel(
         gender: String,
         parentUids: List<String>,
         studentUid: String,
-        gradesVisibleToStudent: Boolean
+        gradesVisibleToStudent: Boolean,
+        academicYear: String = schoolClass.academicYear.ifBlank { "2026-2027" },
+        legalGuardianName: String = "",
+        legalGuardianPhone: String = "",
+        legalGuardianRelation: String = "",
+        academicHistory: String = ""
     ) {
         val actor = userProfile.value ?: return
         runAction("Élève $firstName $lastName inscrit.") {
             adminRepo.enrollStudent(
-                actor, school, schoolClass, firstName, lastName, matricule,
-                dateOfBirth, gender, parentUids, studentUid, gradesVisibleToStudent
+                actor = actor,
+                school = school,
+                schoolClass = schoolClass,
+                firstName = firstName,
+                lastName = lastName,
+                matricule = matricule,
+                dateOfBirth = dateOfBirth,
+                gender = gender,
+                parentUids = parentUids,
+                studentUid = studentUid,
+                gradesVisibleToStudent = gradesVisibleToStudent,
+                academicYear = academicYear,
+                legalGuardianName = legalGuardianName,
+                legalGuardianPhone = legalGuardianPhone,
+                legalGuardianRelation = legalGuardianRelation,
+                academicHistory = academicHistory
             )
+        }
+    }
+
+    fun importStudentsCsv(school: School, fallbackClass: SchoolClass, csvContent: String) {
+        val actor = userProfile.value ?: return
+        val rows = CsvStudentHelper.parseStudentsFromCsv(csvContent)
+        if (rows.isEmpty()) {
+            _errorMessage.value = "Aucun élève valide détecté dans le fichier CSV."
+            return
+        }
+        viewModelScope.launch {
+            _isBusy.value = true
+            _errorMessage.value = null
+            val res = adminRepo.importStudentsBatch(actor, school, classes.value, fallbackClass, rows)
+            _isBusy.value = false
+            res.onSuccess { count ->
+                _feedbackMessage.value = "$count élève(s) importé(s) avec succès."
+            }.onFailure { err ->
+                _errorMessage.value = err.localizedMessage ?: "Erreur lors de l'import CSV."
+            }
         }
     }
 
@@ -456,11 +587,12 @@ class AppViewModel(
         school: School?,
         phone: String,
         studentIds: List<String> = emptyList(),
-        classIds: List<String> = emptyList()
+        classIds: List<String> = emptyList(),
+        subjectIds: List<String> = emptyList()
     ) {
         val actor = userProfile.value ?: return
         runAction("Compte pré-enregistré pour $email.") {
-            adminRepo.createRoleInvitation(actor, email, fullName, role, regionId, school, phone, studentIds, classIds)
+            adminRepo.createRoleInvitation(actor, email, fullName, role, regionId, school, phone, studentIds, classIds, subjectIds)
         }
     }
 
@@ -478,17 +610,33 @@ class AppViewModel(
         }
     }
 
-    fun approveAccessRequest(request: AccessRequest, assignedRole: UserRole, regionId: String, school: School?) {
+    fun approveAccessRequest(
+        request: AccessRequest,
+        assignedRole: UserRole,
+        regionId: String,
+        school: School?,
+        studentIds: List<String> = emptyList(),
+        classIds: List<String> = emptyList(),
+        subjectIds: List<String> = emptyList(),
+        decisionNote: String = ""
+    ) {
         val actor = userProfile.value ?: return
         runAction("Inscription approuvée pour ${request.fullName} (${assignedRole.labelFr}).") {
-            adminRepo.approveAccessRequest(actor, request, assignedRole, regionId, school)
+            adminRepo.approveAccessRequest(actor, request, assignedRole, regionId, school, studentIds, classIds, subjectIds, decisionNote)
         }
     }
 
-    fun rejectAccessRequest(request: AccessRequest) {
+    fun requestMoreInfoAccessRequest(request: AccessRequest, note: String) {
+        val actor = userProfile.value ?: return
+        runAction("Demande d'informations complémentaires envoyée à ${request.fullName}.") {
+            adminRepo.requestMoreInfoAccessRequest(actor, request, note)
+        }
+    }
+
+    fun rejectAccessRequest(request: AccessRequest, reason: String = "") {
         val actor = userProfile.value ?: return
         runAction("Demande d'inscription refusée pour ${request.fullName}.") {
-            adminRepo.rejectAccessRequest(actor, request)
+            adminRepo.rejectAccessRequest(actor, request, reason)
         }
     }
 
@@ -645,11 +793,26 @@ class AppViewModel(
         address: String,
         sector: String,
         description: String,
-        isActive: Boolean
+        isActive: Boolean,
+        phone: String = school.phone,
+        email: String = school.email
     ) {
         val actor = userProfile.value ?: return
         runAction("Établissement « $name » mis à jour.") {
-            adminRepo.updateSchool(actor, school, region, name, code, schoolType, address, sector, description, isActive)
+            adminRepo.updateSchool(
+                actor = actor,
+                school = school,
+                region = region,
+                name = name,
+                code = code,
+                schoolType = schoolType,
+                address = address,
+                sector = sector,
+                description = description,
+                isActive = isActive,
+                phone = phone,
+                email = email
+            )
         }
     }
 
@@ -697,13 +860,31 @@ class AppViewModel(
         dateOfBirth: String,
         gender: String,
         gradesVisibleToStudent: Boolean,
-        isActive: Boolean
+        isActive: Boolean,
+        academicYear: String = student.academicYear,
+        legalGuardianName: String = student.legalGuardianName,
+        legalGuardianPhone: String = student.legalGuardianPhone,
+        legalGuardianRelation: String = student.legalGuardianRelation,
+        academicHistory: String = student.academicHistory
     ) {
         val actor = userProfile.value ?: return
         runAction("Fiche élève de $firstName $lastName mise à jour.") {
             adminRepo.updateStudent(
-                actor, student, targetClass, firstName, lastName, matricule,
-                dateOfBirth, gender, gradesVisibleToStudent, isActive
+                actor = actor,
+                student = student,
+                targetClass = targetClass,
+                firstName = firstName,
+                lastName = lastName,
+                matricule = matricule,
+                dateOfBirth = dateOfBirth,
+                gender = gender,
+                gradesVisibleToStudent = gradesVisibleToStudent,
+                isActive = isActive,
+                academicYear = academicYear,
+                legalGuardianName = legalGuardianName,
+                legalGuardianPhone = legalGuardianPhone,
+                legalGuardianRelation = legalGuardianRelation,
+                academicHistory = academicHistory
             )
         }
     }
@@ -823,6 +1004,90 @@ class AppViewModel(
         val actor = userProfile.value ?: return
         runAction("Annonce « $title » mise à jour.") {
             commRepo.updateAnnouncement(actor, announcement, title, content, priority)
+        }
+    }
+
+    fun recordTeacherAttendance(
+        school: School,
+        teacher: UserProfile,
+        date: String,
+        status: String,
+        minutesLate: Int,
+        justified: Boolean,
+        reason: String
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Présence enseignant enregistrée pour ${teacher.fullName}.") {
+            academicRepo.recordTeacherAttendance(actor, school, teacher, date, status, minutesLate, justified, reason)
+        }
+    }
+
+    fun updateTeacherAttendance(
+        record: TeacherAttendanceRecord,
+        date: String,
+        status: String,
+        minutesLate: Int,
+        justified: Boolean,
+        reason: String
+    ) {
+        val actor = userProfile.value ?: return
+        runAction("Présence enseignant mise à jour.") {
+            academicRepo.updateTeacherAttendance(actor, record, date, status, minutesLate, justified, reason)
+        }
+    }
+
+    fun deleteTeacherAttendance(record: TeacherAttendanceRecord) {
+        val actor = userProfile.value ?: return
+        runAction("Enregistrement supprimé.") {
+            academicRepo.deleteTeacherAttendance(actor, record)
+        }
+    }
+
+    fun inspectQrPairingRequest(rawQrContent: String) {
+        viewModelScope.launch {
+            _qrInspectionLoading.value = true
+            _errorMessage.value = null
+            val res = connectedDevicesRepo.fetchPairingRequest(rawQrContent)
+            _qrInspectionLoading.value = false
+            res.onSuccess { req ->
+                _pendingQrInspection.value = req
+            }.onFailure { err ->
+                _errorMessage.value = err.localizedMessage ?: "QR Code invalide ou expiré."
+            }
+        }
+    }
+
+    fun clearPendingQrInspection() {
+        _pendingQrInspection.value = null
+    }
+
+    fun confirmQrPairing(request: QrPairingRequest) {
+        val actor = userProfile.value ?: return
+        _pendingQrInspection.value = null
+        runAction("Ordinateur connecté avec succès à votre compte.") {
+            connectedDevicesRepo.approvePairingRequest(actor, request)
+        }
+    }
+
+    fun rejectQrPairing(request: QrPairingRequest) {
+        val actor = userProfile.value ?: return
+        _pendingQrInspection.value = null
+        runAction("Association refusée.") {
+            connectedDevicesRepo.rejectPairingRequest(actor, request)
+        }
+    }
+
+    fun revokeDeviceSession(session: ConnectedDeviceSession) {
+        val actor = userProfile.value ?: return
+        runAction("Ordinateur déconnecté à distance.") {
+            connectedDevicesRepo.revokeDeviceSession(actor, session)
+        }
+    }
+
+    fun revokeAllDeviceSessions() {
+        val actor = userProfile.value ?: return
+        runAction("Tous les ordinateurs ont été déconnectés.") {
+            connectedDevicesRepo.revokeAllDeviceSessions(actor, connectedDevices.value)
         }
     }
 }

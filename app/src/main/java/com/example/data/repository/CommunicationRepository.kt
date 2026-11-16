@@ -55,7 +55,7 @@ class CommunicationRepository(
         val base = db.collection("announcements")
         val uid = profile.userId
         val query = when (profile.roleEnum()) {
-            UserRole.ADMIN_NATIONAL -> base.whereEqualTo("nationalAdminUid", profile.nationalAdminUid.ifBlank { uid })
+            UserRole.ADMIN_NATIONAL -> base
             UserRole.ADMIN_REGIONAL -> base.whereEqualTo("regionalAdminUid", uid)
             UserRole.DIRECTEUR -> base.whereEqualTo("directorUid", uid)
             else -> base.whereArrayContains("authorizedUids", uid)

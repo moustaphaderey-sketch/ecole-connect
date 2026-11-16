@@ -118,24 +118,40 @@ fun SchoolLevelFilterRow(
 
 @Composable
 fun OfficialSchoolPickerDialog(
-    title: String = "Établissements de Djibouti-Ville",
+    title: String = "Établissements autorisés",
+    extraEntries: List<OfficialSchoolEntry> = emptyList(),
     onDismiss: () -> Unit,
     onSelectSchool: (OfficialSchoolEntry) -> Unit
 ) {
     var selectedLevel by remember { mutableStateOf(SchoolLevelFilter.ALL) }
     var searchQuery by remember { mutableStateOf("") }
 
-    val counts = remember {
+    val mergedSchools = remember(extraEntries) {
+        (DjiboutiSchoolsCatalog.allSchools + extraEntries)
+            .distinctBy { it.id }
+            .sortedBy { it.name }
+    }
+
+    val counts = remember(mergedSchools) {
         mapOf(
-            SchoolLevelFilter.ALL to DjiboutiSchoolsCatalog.allSchools.size,
-            SchoolLevelFilter.PRIMAIRE to DjiboutiSchoolsCatalog.primarySchools.size,
-            SchoolLevelFilter.COLLEGE to DjiboutiSchoolsCatalog.middleSchools.size,
-            SchoolLevelFilter.LYCEE to DjiboutiSchoolsCatalog.highSchools.size
+            SchoolLevelFilter.ALL to mergedSchools.size,
+            SchoolLevelFilter.PRIMAIRE to mergedSchools.count { it.schoolType.equals("primaire", ignoreCase = true) },
+            SchoolLevelFilter.COLLEGE to mergedSchools.count { it.schoolType.equals("college", ignoreCase = true) },
+            SchoolLevelFilter.LYCEE to mergedSchools.count { it.schoolType.equals("lycee", ignoreCase = true) }
         )
     }
 
-    val filtered = remember(selectedLevel, searchQuery) {
-        DjiboutiSchoolsCatalog.filter(selectedLevel, searchQuery)
+    val filtered = remember(mergedSchools, selectedLevel, searchQuery) {
+        val cleanQuery = searchQuery.trim().lowercase()
+        mergedSchools.filter { entry ->
+            val levelMatches = selectedLevel.typeKey == null || entry.schoolType.equals(selectedLevel.typeKey, ignoreCase = true)
+            val queryMatches = cleanQuery.isEmpty() ||
+                entry.name.lowercase().contains(cleanQuery) ||
+                entry.code.lowercase().contains(cleanQuery) ||
+                entry.sector.lowercase().contains(cleanQuery) ||
+                entry.address.lowercase().contains(cleanQuery)
+            levelMatches && queryMatches
+        }
     }
 
     AlertDialog(
@@ -144,7 +160,7 @@ fun OfficialSchoolPickerDialog(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    text = "${DjiboutiSchoolsCatalog.allSchools.size} établissements officiels (Primaire, Collège, Lycée)",
+                    text = "${mergedSchools.size} établissements scolaires autorisés (Primaire, Collège, Lycée)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

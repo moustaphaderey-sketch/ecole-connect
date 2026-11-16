@@ -231,3 +231,25 @@ data class AuditLog(
     val details: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
 )
+
+@IgnoreExtraProperties
+data class TeacherAttendanceRecord(
+    @DocumentId val id: String = "",
+    val schoolId: String = "",
+    val tenantId: String = "",
+    val regionId: String = "",
+    val teacherUid: String = "",
+    val teacherName: String = "",
+    val directorUid: String = "",
+    val regionalAdminUid: String = "",
+    val nationalAdminUid: String = "",
+    val authorizedUids: List<String> = emptyList(),
+    val date: String = "",
+    val status: String = "present",
+    val minutesLate: Int = 0,
+    val justified: Boolean = false,
+    val reason: String = "",
+    val createdByUid: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)

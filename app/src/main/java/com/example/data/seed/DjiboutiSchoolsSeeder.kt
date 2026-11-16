@@ -76,7 +76,7 @@ class DjiboutiSchoolsSeeder(
                 targetRegion.regionalAdminUid.takeIf { it.isNotBlank() }
             ).distinct()
 
-            missingEntries.chunked(200).forEach { chunk ->
+            missingEntries.chunked(150).forEach { chunk ->
                 val batch = db.batch()
                 chunk.forEach { entry ->
                     val payload = buildSchoolDocumentMap(
@@ -87,6 +87,11 @@ class DjiboutiSchoolsSeeder(
                         authorizedUids = authUids
                     )
                     batch.set(db.collection("schools").document(entry.id), payload)
+                    val directoryPayload = buildSchoolDirectoryMap(
+                        entry = entry,
+                        region = targetRegion
+                    )
+                    batch.set(db.collection("school_directory").document(entry.id), directoryPayload)
                 }
                 batch.commit().await()
             }
@@ -239,6 +244,31 @@ class DjiboutiSchoolsSeeder(
                 payload["regionalAdminUid"] = region.regionalAdminUid
             }
             return payload
+        }
+
+        fun buildSchoolDirectoryMap(
+            entry: OfficialSchoolEntry,
+            region: Region,
+            useServerTimestamps: Boolean = true
+        ): Map<String, Any> {
+            val timestampValue: Any = if (useServerTimestamps) {
+                FieldValue.serverTimestamp()
+            } else {
+                com.google.firebase.Timestamp.now()
+            }
+            return mapOf(
+                "schoolId" to entry.id,
+                "name" to entry.name.take(160),
+                "code" to entry.code.take(30),
+                "schoolType" to entry.schoolType,
+                "regionId" to region.id,
+                "regionName" to region.name.take(120),
+                "sector" to entry.sector.take(120),
+                "address" to entry.address.take(240),
+                "isActive" to true,
+                "createdAt" to timestampValue,
+                "updatedAt" to timestampValue
+            )
         }
     }
 }

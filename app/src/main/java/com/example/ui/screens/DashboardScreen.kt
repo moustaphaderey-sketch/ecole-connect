@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +19,8 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Class
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Info
@@ -44,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -68,6 +74,7 @@ import com.example.ui.components.RoleBadge
 import com.example.ui.components.SectionHeader
 import com.example.ui.components.StatKpiCard
 import com.example.ui.viewmodel.AppSection
+import com.example.util.CsvStudentHelper
 import com.example.util.DateUtils
 import com.example.util.GradeCalculator
 import java.util.Locale
@@ -98,8 +105,26 @@ fun DashboardScreen(
     onImportOfficialSchools: () -> Unit = {},
     onUpdateSettings: (String, Double, Boolean, Boolean) -> Unit
 ) {
+    val context = LocalContext.current
     val role = profile.roleEnum()
     var showSettingsDialog by remember { mutableStateOf(false) }
+
+    val nationalReportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            runCatching {
+                val csv = CsvStudentHelper.exportNationalReportCsv(
+                    schools = schools,
+                    classes = classes,
+                    students = students,
+                    grades = assessments,
+                    attendance = attendance
+                )
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(csv) }
+            }
+        }
+    }
 
     val activeChild: Student? = remember(students, selectedChildId) {
         students.firstOrNull { it.id == selectedChildId } ?: students.firstOrNull()
@@ -167,7 +192,7 @@ fun DashboardScreen(
             }
         }
 
-        if (role == UserRole.ADMIN_NATIONAL && pendingAccessRequestsCount > 0) {
+        if ((role == UserRole.ADMIN_NATIONAL || role == UserRole.DIRECTEUR) && pendingAccessRequestsCount > 0) {
             item {
                 ElevatedCard(
                     onClick = onOpenPendingApprovals,
@@ -199,7 +224,11 @@ fun DashboardScreen(
                             )
                         }
                         Text(
-                            text = "De nouveaux comptes (Enseignant, Parent, Directeur…) ont soumis leur inscription Google et attendent votre approbation dans Comptes & Invitations.",
+                            text = if (role == UserRole.DIRECTEUR) {
+                                "Des comptes Parents ou Enseignants rattachés à votre établissement attendent votre vérification dans Comptes & Invitations."
+                            } else {
+                                "Des demandes de directions d'établissement et comptes nationaux attendent votre décision dans Comptes & Invitations."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer
                         )
@@ -490,6 +519,27 @@ fun DashboardScreen(
                 ) {
                     Text("Gérer les établissements, classes & utilisateurs")
                 }
+            }
+            if (role == UserRole.ADMIN_NATIONAL) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { nationalReportLauncher.launch("rapport_national_ecole_connectee.csv") },
+                    enabled = schools.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth().testTag("export_national_report_csv_button")
+                ) {
+                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(8.dp))
+                    Text("Exporter rapport national (CSV)")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { onNavigate(AppSection.APPAREILS_CONNECTES) },
+                modifier = Modifier.fillMaxWidth().testTag("quick_connected_devices_button")
+            ) {
+                Icon(Icons.Filled.Devices, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.size(8.dp))
+                Text("Appareils connectés (Connexion Web QR)")
             }
         }
 

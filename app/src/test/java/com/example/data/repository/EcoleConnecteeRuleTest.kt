@@ -7,6 +7,7 @@ import com.example.data.seed.DjiboutiSchoolsSeeder
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -148,7 +149,8 @@ class EcoleConnecteeRuleTest : FirestoreEmulatorTestBase() {
             fullName = "Admin National",
             email = adminEmail,
             phone = "+25377000010",
-            consentAccepted = true
+            consentAccepted = true,
+            seedOfficialSchools = true
         ).getOrThrow()
         val adminProfile = withTimeout(FLOW_TIMEOUT_MS) {
             authRepo.observeUserProfile(adminUid).first { it != null }!!
@@ -171,14 +173,22 @@ class EcoleConnecteeRuleTest : FirestoreEmulatorTestBase() {
         assertEquals("pending", myReq.status)
         assertEquals(UserRole.ENSEIGNANT.key, myReq.requestedRole)
 
-        // National admin observes and approves request, generating role invitation
+        // National admin observes seeded school, verifies school is mandatory, and approves request
         signInTestUser(adminEmail)
+        val authorizedSchool = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeSchools(adminProfile).first { list -> list.isNotEmpty() }
+        }.first()
         val requests = withTimeout(FLOW_TIMEOUT_MS) {
             adminRepo.observeAccessRequests(adminProfile).first { list -> list.any { it.userId == teacherUid } }
         }
         val targetReq = requests.first { it.userId == teacherUid }
+        val missingSchoolResult = withTimeout(DEFAULT_TIMEOUT_MS) {
+            adminRepo.approveAccessRequest(adminProfile, targetReq, UserRole.ENSEIGNANT, "", null)
+        }
+        assertTrue(missingSchoolResult.isFailure)
+
         val invitationId = withTimeout(DEFAULT_TIMEOUT_MS) {
-            adminRepo.approveAccessRequest(adminProfile, targetReq, UserRole.ENSEIGNANT, "", null).getOrThrow()
+            adminRepo.approveAccessRequest(adminProfile, targetReq, UserRole.ENSEIGNANT, authorizedSchool.regionId, authorizedSchool).getOrThrow()
         }
         assertTrue(invitationId.isNotBlank())
 
@@ -255,7 +265,7 @@ class EcoleConnecteeRuleTest : FirestoreEmulatorTestBase() {
     }
 
     @Test
-    fun bootstrapNationalAdmin_automaticallySeedsAll39DjiboutiSchools() = runBlocking {
+    fun bootstrapNationalAdmin_doesNotSeedByDefault_andExplicitSeederPopulatesAll39DjiboutiSchools() = runBlocking {
         val adminEmail = "autoseed_${UUID.randomUUID().toString().take(8)}@ecole.dj"
         val adminUid = signInTestUser(adminEmail)
         val authRepo = AuthRepository(firestore, auth)
@@ -272,6 +282,28 @@ class EcoleConnecteeRuleTest : FirestoreEmulatorTestBase() {
         val adminProfile = withTimeout(FLOW_TIMEOUT_MS) {
             authRepo.observeUserProfile(adminUid).first { it != null }!!
         }
+
+        val initialSchools = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeSchools(adminProfile).first()
+        }
+        assertEquals(0, initialSchools.size)
+
+        val initialRegions = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeRegions(adminProfile).first()
+        }
+        assertEquals(0, initialRegions.size)
+
+        val seedResult = withTimeout(15000L) {
+            DjiboutiSchoolsSeeder(firestore, auth).seed(
+                actorUid = adminProfile.userId,
+                actorName = adminProfile.fullName,
+                actorRole = adminProfile.role,
+                nationalAdminUid = adminProfile.userId,
+                existingRegions = initialRegions,
+                existingSchools = initialSchools
+            ).getOrThrow()
+        }
+        assertEquals(39, seedResult.createdCount)
 
         val regions = withTimeout(FLOW_TIMEOUT_MS) {
             adminRepo.observeRegions(adminProfile).first { list -> list.any { it.id == "reg_djibouti_ville" } }
@@ -314,49 +346,43 @@ class EcoleConnecteeRuleTest : FirestoreEmulatorTestBase() {
             fullName = "Inspecteur National",
             email = adminEmail,
             phone = "+25377000011",
-            consentAccepted = true
+            consentAccepted = true,
+            seedOfficialSchools = true
         ).getOrThrow()
         val adminProfile = withTimeout(FLOW_TIMEOUT_MS) {
             authRepo.observeUserProfile(adminUid).first { it != null }!!
         }
 
-        // Case 1: Director 1 submits request, Admin approves WITHOUT selecting a school
+        // Case 1: Director 1 submits request; approving without an authorized school is rejected, then approved with official school
         val dir1Uid = signInTestUser(dir1Email)
         authRepo.submitAccessRequest(
             uid = dir1Uid,
             fullName = "Directeur Hassan",
             email = dir1Email,
             requestedRole = UserRole.DIRECTEUR,
-            schoolHint = "École Primaire PK12",
+            schoolId = "dj_ep_pk12",
+            schoolName = "École PK12",
+            schoolHint = "École PK12 (Primaire)",
             phone = "+25377220011"
         ).getOrThrow()
 
         signInTestUser(adminEmail)
+        val pk12School = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeSchools(adminProfile).first { list -> list.any { it.id == "dj_ep_pk12" } }
+        }.first { it.id == "dj_ep_pk12" }
         val req1 = withTimeout(FLOW_TIMEOUT_MS) {
             adminRepo.observeAccessRequests(adminProfile).first { list -> list.any { it.userId == dir1Uid } }
         }.first { it.userId == dir1Uid }
-        adminRepo.approveAccessRequest(adminProfile, req1, UserRole.DIRECTEUR, "", null).getOrThrow()
+        val missingSchoolApproval = withTimeout(DEFAULT_TIMEOUT_MS) {
+            adminRepo.approveAccessRequest(adminProfile, req1, UserRole.DIRECTEUR, "", null)
+        }
+        assertTrue(missingSchoolApproval.isFailure)
+
+        adminRepo.approveAccessRequest(adminProfile, req1, UserRole.DIRECTEUR, pk12School.regionId, pk12School).getOrThrow()
 
         signInTestUser(dir1Email)
         val inv1 = withTimeout(DEFAULT_TIMEOUT_MS) { authRepo.findPendingInvitationForEmail(dir1Email) }!!
         authRepo.claimRoleInvitation(dir1Uid, inv1, "Directeur Hassan", dir1Email, "+25377220011", true).getOrThrow()
-        val dir1InitialProfile = withTimeout(FLOW_TIMEOUT_MS) {
-            authRepo.observeUserProfile(dir1Uid).first { it != null }!!
-        }
-
-        val createdSchoolId = withTimeout(DEFAULT_TIMEOUT_MS) {
-            adminRepo.createOrClaimSchoolForDirector(
-                actor = dir1InitialProfile,
-                region = null,
-                name = "École PK12",
-                code = "EP-PK12",
-                schoolType = "primaire",
-                address = "Balbala PK12",
-                officialSchoolId = "dj_ep_pk12"
-            ).getOrThrow()
-        }
-        assertEquals("dj_ep_pk12", createdSchoolId)
-
         val dir1UpdatedProfile = withTimeout(FLOW_TIMEOUT_MS) {
             authRepo.observeUserProfile(dir1Uid).first { it?.schoolId == "dj_ep_pk12" }!!
         }
@@ -761,6 +787,473 @@ class EcoleConnecteeRuleTest : FirestoreEmulatorTestBase() {
         }
         assertTrue(parentStudentEdit.isFailure)
         assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, parentStudentEdit.exceptionOrNull()?.unwrapFirestoreException()?.code)
+    }
+
+    @Test
+    fun tieredAccountValidation_andStructuralLinkages_workEndToEnd() = runBlocking {
+        val natAdminEmail = "tier_nat_${UUID.randomUUID().toString().take(8)}@ecole.dj"
+        val dirEmail = "tier_dir_${UUID.randomUUID().toString().take(8)}@ecole.dj"
+        val otherDirEmail = "tier_dir2_${UUID.randomUUID().toString().take(8)}@ecole.dj"
+        val parentEmail = "tier_par_${UUID.randomUUID().toString().take(8)}@ecole.dj"
+        val teacherEmail = "tier_prof_${UUID.randomUUID().toString().take(8)}@ecole.dj"
+        val rejectedEmail = "tier_rej_${UUID.randomUUID().toString().take(8)}@ecole.dj"
+
+        val authRepo = AuthRepository(firestore, auth)
+        val adminRepo = AdminRepository(firestore, auth)
+        val academicRepo = AcademicRepository(firestore, auth)
+
+        // 1. Bootstrap National Admin (seeds official schools + school_directory)
+        val natAdminUid = signInTestUser(natAdminEmail)
+        authRepo.bootstrapNationalAdmin(
+            uid = natAdminUid,
+            fullName = "Inspecteur National",
+            email = natAdminEmail,
+            phone = "+25377000900",
+            consentAccepted = true,
+            seedOfficialSchools = true
+        ).getOrThrow()
+        val natAdminProfile = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeUserProfile(natAdminUid).first { it != null }!!
+        }
+
+        // 2. Unactivated Director reads school_directory and submits request (approved by National Admin)
+        val dirUid = signInTestUser(dirEmail)
+        val directory = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeSchoolDirectory().first { list -> list.any { it.schoolId == "dj_col_boulaos" } }
+        }
+        val boulaosEntry = directory.first { it.schoolId == "dj_col_boulaos" }
+        authRepo.submitAccessRequest(
+            uid = dirUid,
+            firstName = "Oumar",
+            lastName = "Farah",
+            fullName = "Oumar Farah",
+            email = dirEmail,
+            requestedRole = UserRole.DIRECTEUR,
+            schoolId = boulaosEntry.schoolId,
+            schoolName = boulaosEntry.name,
+            schoolHint = "${boulaosEntry.name} (Collège)",
+            phone = "+25377111222"
+        ).getOrThrow()
+
+        // Other director submits request for a different school
+        val otherDirUid = signInTestUser(otherDirEmail)
+        authRepo.submitAccessRequest(
+            uid = otherDirUid,
+            firstName = "Khadija",
+            lastName = "Obsieh",
+            fullName = "Khadija Obsieh",
+            email = otherDirEmail,
+            requestedRole = UserRole.DIRECTEUR,
+            schoolId = "dj_ep_pk12",
+            schoolName = "École PK12",
+            schoolHint = "École PK12 (Primaire)",
+            phone = "+25377111333"
+        ).getOrThrow()
+
+        // National Admin approves Director for Collège de Boulaos
+        signInTestUser(natAdminEmail)
+        val boulaosSchool = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeSchools(natAdminProfile).first { list -> list.any { it.id == "dj_col_boulaos" } }
+        }.first { it.id == "dj_col_boulaos" }
+        val dirReq = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeAccessRequests(natAdminProfile).first { list -> list.any { it.userId == dirUid } }
+        }.first { it.userId == dirUid }
+        adminRepo.approveAccessRequest(
+            actor = natAdminProfile,
+            request = dirReq,
+            assignedRole = UserRole.DIRECTEUR,
+            regionId = boulaosSchool.regionId,
+            school = boulaosSchool,
+            decisionNote = "Nomination confirmée"
+        ).getOrThrow()
+
+        // Director claims invitation and creates Class, Subject, and Student in their school
+        signInTestUser(dirEmail)
+        val dirInv = withTimeout(DEFAULT_TIMEOUT_MS) { authRepo.findPendingInvitationForEmail(dirEmail) }!!
+        authRepo.claimRoleInvitation(dirUid, dirInv, "Oumar Farah", dirEmail, "+25377111222", true).getOrThrow()
+        val dirProfile = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeUserProfile(dirUid).first { it?.schoolId == "dj_col_boulaos" }!!
+        }
+        val dirSchool = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeSchools(dirProfile).first { list -> list.any { it.id == "dj_col_boulaos" } }
+        }.first { it.id == "dj_col_boulaos" }
+        assertEquals(dirUid, dirSchool.directorUid)
+
+        val classId = withTimeout(DEFAULT_TIMEOUT_MS) {
+            adminRepo.createClass(dirProfile, dirSchool, "6ème C", "6ème", "2026-2027").getOrThrow()
+        }
+        val schoolClass = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeClasses(dirProfile).first { list -> list.any { it.id == classId } }
+        }.first { it.id == classId }
+        val subjectId = withTimeout(DEFAULT_TIMEOUT_MS) {
+            adminRepo.createSubject(dirProfile, dirSchool, schoolClass, "Sciences Physiques", "PC", 2.0, "", "").getOrThrow()
+        }
+        val studentId = withTimeout(DEFAULT_TIMEOUT_MS) {
+            adminRepo.enrollStudent(
+                actor = dirProfile,
+                school = dirSchool,
+                schoolClass = schoolClass,
+                firstName = "Samira",
+                lastName = "Idriss",
+                matricule = "DJ-6C-01",
+                dateOfBirth = "2014-05-20",
+                gender = "F",
+                parentUids = emptyList(),
+                studentUid = "",
+                gradesVisibleToStudent = true
+            ).getOrThrow()
+        }
+
+        // Director must NOT see other director's request (otherDirUid requested DIRECTEUR for dj_ep_pk12)
+        val dirVisibleRequests = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeAccessRequests(dirProfile).first()
+        }
+        assertTrue(dirVisibleRequests.none { it.userId == otherDirUid })
+
+        // 3. Parent signs up -> stays pending -> blocked from school data -> Director requests info -> Parent resubmits -> Director approves linked to student
+        val parentUid = signInTestUser(parentEmail)
+        authRepo.submitAccessRequest(
+            uid = parentUid,
+            firstName = "Halima",
+            lastName = "Idriss",
+            fullName = "Halima Idriss",
+            email = parentEmail,
+            requestedRole = UserRole.PARENT,
+            schoolId = dirSchool.id,
+            schoolName = dirSchool.name,
+            schoolHint = "${dirSchool.name} (Collège)",
+            extraDetails = "Parent de Samira Idriss",
+            phone = "+25377445566"
+        ).getOrThrow()
+
+        // Step 2 check: Pending user has NO access to school classes/students
+        val pendingClassesCheck = withTimeout(FLOW_TIMEOUT_MS) {
+            try {
+                firestore.collection("classes").whereEqualTo("schoolId", dirSchool.id).get().await()
+                false
+            } catch (_: Exception) {
+                true
+            }
+        }
+        assertTrue("Pending account must not access school data", pendingClassesCheck)
+
+        // Step 3 & 4: Director requests complementary info on Parent request
+        signInTestUser(dirEmail)
+        val parentReq = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeAccessRequests(dirProfile).first { list -> list.any { it.userId == parentUid && it.status == "pending" } }
+        }.first { it.userId == parentUid }
+        adminRepo.requestMoreInfoAccessRequest(
+            actor = dirProfile,
+            request = parentReq,
+            note = "Veuillez indiquer le matricule de votre fille."
+        ).getOrThrow()
+
+        // Parent sees info_requested and resubmits -> status returns to pending
+        signInTestUser(parentEmail)
+        val infoReq = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeMyAccessRequest(parentUid).first { it?.status == "info_requested" }!!
+        }
+        assertEquals("Veuillez indiquer le matricule de votre fille.", infoReq.decisionNote)
+        authRepo.resubmitAccessRequest(
+            uid = parentUid,
+            firstName = "Halima",
+            lastName = "Idriss",
+            fullName = "Halima Idriss",
+            requestedRole = UserRole.PARENT,
+            schoolId = dirSchool.id,
+            schoolName = dirSchool.name,
+            schoolHint = "${dirSchool.name} (Collège)",
+            extraDetails = "Parent de Samira Idriss",
+            applicantResponse = "Matricule DJ-6C-01 en 6ème C",
+            phone = "+25377445566"
+        ).getOrThrow()
+
+        // Director approves Parent linked to studentId
+        signInTestUser(dirEmail)
+        val parentReqResubmitted = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeAccessRequests(dirProfile).first { list -> list.any { it.userId == parentUid && it.status == "pending" } }
+        }.first { it.userId == parentUid }
+        assertEquals("Matricule DJ-6C-01 en 6ème C", parentReqResubmitted.applicantResponse)
+
+        adminRepo.approveAccessRequest(
+            actor = dirProfile,
+            request = parentReqResubmitted,
+            assignedRole = UserRole.PARENT,
+            regionId = dirSchool.regionId,
+            school = dirSchool,
+            studentIds = listOf(studentId),
+            decisionNote = "Lien parent-élève vérifié"
+        ).getOrThrow()
+
+        // Step 5: Parent claims invitation -> verifies studentIds & student.parentUids linkage
+        signInTestUser(parentEmail)
+        val parentInv = withTimeout(DEFAULT_TIMEOUT_MS) { authRepo.findPendingInvitationForEmail(parentEmail) }!!
+        assertEquals(listOf(studentId), parentInv.studentIds)
+        authRepo.claimRoleInvitation(parentUid, parentInv, "Halima Idriss", parentEmail, "+25377445566", true).getOrThrow()
+        val parentProfile = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeUserProfile(parentUid).first { it != null }!!
+        }
+        assertTrue(parentProfile.studentIds.contains(studentId))
+        val linkedStudents = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeStudents(parentProfile).first { list -> list.any { it.id == studentId } }
+        }
+        assertTrue(linkedStudents.first { it.id == studentId }.parentUids.contains(parentUid))
+
+        // 4. Teacher signs up -> Director approves linked to classId & subjectId -> verifies linkages
+        val teacherUid = signInTestUser(teacherEmail)
+        authRepo.submitAccessRequest(
+            uid = teacherUid,
+            firstName = "Moussa",
+            lastName = "Guelleh",
+            fullName = "Moussa Guelleh",
+            email = teacherEmail,
+            requestedRole = UserRole.ENSEIGNANT,
+            schoolId = dirSchool.id,
+            schoolName = dirSchool.name,
+            schoolHint = "${dirSchool.name} (Collège)",
+            extraDetails = "6ème C — Sciences Physiques",
+            phone = "+25377556677"
+        ).getOrThrow()
+
+        signInTestUser(dirEmail)
+        val teacherReq = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeAccessRequests(dirProfile).first { list -> list.any { it.userId == teacherUid } }
+        }.first { it.userId == teacherUid }
+        adminRepo.approveAccessRequest(
+            actor = dirProfile,
+            request = teacherReq,
+            assignedRole = UserRole.ENSEIGNANT,
+            regionId = dirSchool.regionId,
+            school = dirSchool,
+            classIds = listOf(classId),
+            subjectIds = listOf(subjectId),
+            decisionNote = "Affecté en 6ème C"
+        ).getOrThrow()
+
+        signInTestUser(teacherEmail)
+        val teacherInv = withTimeout(DEFAULT_TIMEOUT_MS) { authRepo.findPendingInvitationForEmail(teacherEmail) }!!
+        authRepo.claimRoleInvitation(teacherUid, teacherInv, "Moussa Guelleh", teacherEmail, "+25377556677", true).getOrThrow()
+        val teacherProfile = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeUserProfile(teacherUid).first { it != null }!!
+        }
+        assertTrue(teacherProfile.classIds.contains(classId))
+        assertTrue(teacherProfile.subjectIds.contains(subjectId))
+
+        val teacherSubjects = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeSubjects(teacherProfile).first { list -> list.any { it.id == subjectId } }
+        }
+        assertEquals(teacherUid, teacherSubjects.first { it.id == subjectId }.teacherUid)
+
+        // 5. Rejected applicant flow
+        val rejectedUid = signInTestUser(rejectedEmail)
+        authRepo.submitAccessRequest(
+            uid = rejectedUid,
+            firstName = "Inconnu",
+            lastName = "Test",
+            fullName = "Inconnu Test",
+            email = rejectedEmail,
+            requestedRole = UserRole.PARENT,
+            schoolId = dirSchool.id,
+            schoolName = dirSchool.name,
+            schoolHint = "${dirSchool.name} (Collège)",
+            phone = "+25377999999"
+        ).getOrThrow()
+
+        signInTestUser(dirEmail)
+        val rejReq = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeAccessRequests(dirProfile).first { list -> list.any { it.userId == rejectedUid } }
+        }.first { it.userId == rejectedUid }
+        adminRepo.rejectAccessRequest(dirProfile, rejReq, "Élève introuvable dans nos registres").getOrThrow()
+
+        signInTestUser(rejectedEmail)
+        val rejState = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeMyAccessRequest(rejectedUid).first { it?.status == "rejected" }!!
+        }
+        assertEquals("Élève introuvable dans nos registres", rejState.decisionNote)
+
+        // 6. National Admin has national visibility across classes, students, and all requests
+        signInTestUser(natAdminEmail)
+        val nationalClasses = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeClasses(natAdminProfile).first { list -> list.any { it.id == classId } }
+        }
+        val nationalStudents = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeStudents(natAdminProfile).first { list -> list.any { it.id == studentId } }
+        }
+        val nationalRequests = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeAccessRequests(natAdminProfile).first { list ->
+                list.any { it.userId == otherDirUid } && list.any { it.userId == parentUid }
+            }
+        }
+        assertTrue(nationalClasses.any { it.id == classId })
+        assertTrue(nationalStudents.any { it.id == studentId })
+        assertTrue(nationalRequests.size >= 4)
+    }
+
+    @Test
+    fun connectedDevices_teacherAttendance_andExtendedSchoolStudentBatch_workEndToEnd() = runBlocking {
+        val adminEmail = "ext_adm_${UUID.randomUUID().toString().take(8)}@ecole.dj"
+        val teacherEmail = "ext_prof_${UUID.randomUUID().toString().take(8)}@ecole.dj"
+
+        val authRepo = AuthRepository(firestore, auth)
+        val adminRepo = AdminRepository(firestore, auth)
+        val academicRepo = AcademicRepository(firestore, auth)
+        val devicesRepo = ConnectedDevicesRepository(firestore, auth)
+
+        val adminUid = signInTestUser(adminEmail)
+        authRepo.bootstrapNationalAdmin(
+            uid = adminUid,
+            fullName = "Inspecteur National",
+            email = adminEmail,
+            phone = "+25377000800",
+            consentAccepted = true
+        ).getOrThrow()
+        val adminProfile = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeUserProfile(adminUid).first { it != null }!!
+        }
+
+        val regionId = adminRepo.createRegion(adminProfile, "Balbala", "BAL").getOrThrow()
+        val region = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeRegions(adminProfile).first { it.any { r -> r.id == regionId } }
+        }.first { it.id == regionId }
+
+        val schoolId = adminRepo.createSchool(
+            actor = adminProfile,
+            region = region,
+            name = "Lycée de Hodan 4",
+            code = "LYC-H4",
+            schoolType = "lycee",
+            address = "Quartier Hodan",
+            phone = "+25321351200",
+            email = "contact@hodan4.dj"
+        ).getOrThrow()
+        val school = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeSchools(adminProfile).first { it.any { s -> s.id == schoolId } }
+        }.first { it.id == schoolId }
+        assertEquals("+25321351200", school.phone)
+        assertEquals("contact@hodan4.dj", school.email)
+
+        val classId = adminRepo.createClass(adminProfile, school, "2nde A", "2nde", "2026-2027").getOrThrow()
+        val schoolClass = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeClasses(adminProfile).first { it.any { c -> c.id == classId } }
+        }.first { it.id == classId }
+
+        // Batch import students with guardian and academic history metadata
+        val importedCount = adminRepo.importStudentsBatch(
+            actor = adminProfile,
+            school = school,
+            classes = listOf(schoolClass),
+            fallbackClass = schoolClass,
+            rows = listOf(
+                com.example.util.CsvStudentRow(
+                    matricule = "DJ-H4-01",
+                    firstName = "Fathia",
+                    lastName = "Abdi",
+                    dateOfBirth = "2010-03-14",
+                    gender = "F",
+                    className = "2nde A",
+                    academicYear = "2026-2027",
+                    legalGuardianName = "Abdi Moussa",
+                    legalGuardianPhone = "+25377889900",
+                    legalGuardianRelation = "Père",
+                    academicHistory = "Collège Hodan 1 (2025-2026)"
+                )
+            )
+        ).getOrThrow()
+        assertEquals(1, importedCount)
+        val importedStudent = withTimeout(FLOW_TIMEOUT_MS) {
+            adminRepo.observeStudents(adminProfile).first { it.any { s -> s.matricule == "DJ-H4-01" } }
+        }.first { it.matricule == "DJ-H4-01" }
+        assertEquals("Abdi Moussa", importedStudent.legalGuardianName)
+        assertEquals("Collège Hodan 1 (2025-2026)", importedStudent.academicHistory)
+
+        // Provision a teacher and test Teacher Attendance CRUD
+        adminRepo.createRoleInvitation(adminProfile, teacherEmail, "Professeur Farah", UserRole.ENSEIGNANT, regionId, school, "+25377554433").getOrThrow()
+        val teacherUid = signInTestUser(teacherEmail)
+        val inv = authRepo.findPendingInvitationForEmail(teacherEmail)!!
+        authRepo.claimRoleInvitation(teacherUid, inv, "Professeur Farah", teacherEmail, "+25377554433", true).getOrThrow()
+        val teacherProfile = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeUserProfile(teacherUid).first { it != null }!!
+        }
+
+        signInTestUser(adminEmail)
+        val tattId = academicRepo.recordTeacherAttendance(
+            actor = adminProfile,
+            school = school,
+            teacher = teacherProfile,
+            date = "2026-11-15",
+            status = "absent",
+            minutesLate = 0,
+            justified = false,
+            reason = "Absence matinale"
+        ).getOrThrow()
+        val tatt = withTimeout(FLOW_TIMEOUT_MS) {
+            academicRepo.observeTeacherAttendance(adminProfile).first { it.any { r -> r.id == tattId } }
+        }.first { it.id == tattId }
+        academicRepo.updateTeacherAttendance(adminProfile, tatt, "2026-11-15", "retard", 15, true, "Justifié").getOrThrow()
+        val updatedTatt = withTimeout(FLOW_TIMEOUT_MS) {
+            academicRepo.observeTeacherAttendance(adminProfile).first { it.any { r -> r.id == tattId && r.status == "retard" } }
+        }.first { it.id == tattId }
+        assertTrue(updatedTatt.justified)
+        academicRepo.deleteTeacherAttendance(adminProfile, updatedTatt).getOrThrow()
+
+        // Connected Devices & QR pairing request test via emulator REST seed of pending qr_pairing_requests
+        val qrReqId = "req_${UUID.randomUUID().toString().replace("-", "").take(16)}"
+        seedQrPairingRequestInEmulator(qrReqId, "Firefox", "Windows 11")
+
+        val inspected = withTimeout(DEFAULT_TIMEOUT_MS) {
+            devicesRepo.fetchPairingRequest(qrReqId).getOrThrow()
+        }
+        assertEquals("Firefox", inspected.browserName)
+        val sessionId = withTimeout(DEFAULT_TIMEOUT_MS) {
+            devicesRepo.approvePairingRequest(adminProfile, inspected).getOrThrow()
+        }
+        val activeDevices = withTimeout(FLOW_TIMEOUT_MS) {
+            devicesRepo.observeConnectedDevices(adminUid).first { it.any { d -> d.sessionId == sessionId && !d.revoked } }
+        }
+        assertEquals(1, activeDevices.count { !it.revoked })
+
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+            devicesRepo.revokeDeviceSession(adminProfile, activeDevices.first { it.sessionId == sessionId }).getOrThrow()
+        }
+        val afterRevoke = withTimeout(FLOW_TIMEOUT_MS) {
+            devicesRepo.observeConnectedDevices(adminUid).first { it.any { d -> d.sessionId == sessionId && d.revoked } }
+        }
+        assertTrue(afterRevoke.first { it.sessionId == sessionId }.revoked)
+    }
+
+    private fun seedQrPairingRequestInEmulator(requestId: String, browser: String, os: String) {
+        val nowMs = System.currentTimeMillis()
+        val createdIso = java.time.Instant.ofEpochMilli(nowMs - 1000).toString()
+        val expiresIso = java.time.Instant.ofEpochMilli(nowMs + 120_000).toString()
+        val url = java.net.URL("http://127.0.0.1:8085/v1/projects/demo-no-project/databases/$databaseId/documents/qr_pairing_requests?documentId=$requestId")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("Authorization", "Bearer owner")
+            conn.doOutput = true
+            val body = """
+                {
+                  "fields": {
+                    "requestId": {"stringValue": "$requestId"},
+                    "proofHash": {"stringValue": "${"c".repeat(64)}"},
+                    "status": {"stringValue": "pending"},
+                    "browserName": {"stringValue": "$browser"},
+                    "osName": {"stringValue": "$os"},
+                    "userAgentLabel": {"stringValue": "$browser sur $os"},
+                    "consumed": {"booleanValue": false},
+                    "expiresAt": {"timestampValue": "$expiresIso"},
+                    "createdAt": {"timestampValue": "$createdIso"},
+                    "updatedAt": {"timestampValue": "$createdIso"}
+                  }
+                }
+            """.trimIndent()
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            check(code in 200..299) { "Seeding qr_pairing_requests failed with HTTP $code" }
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private companion object {

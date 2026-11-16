@@ -586,3 +586,355 @@ test("Record updates: authorized director/teacher succeed on allowed fields, par
   );
 });
 
+test("Tiered validation & school_directory: Director manages school_a parent/teacher requests, denied for other school or director role", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("school_directory").doc("school_a").set({
+      schoolId: "school_a",
+      name: "Collège de Boulaos",
+      code: "COL-BL",
+      schoolType: "college",
+      sector: "Quartiers Sud",
+      regionId: "reg_djibouti_ville",
+      regionName: "Djibouti-Ville",
+      city: "Djibouti-Ville",
+      country: "Djibouti",
+      isActive: true,
+    });
+    await db.collection("users").doc(DIRECTOR_UID).set({
+      userId: DIRECTOR_UID,
+      fullName: "Directeur Boulaos",
+      role: "directeur",
+      schoolId: "school_a",
+      tenantId: "school_a",
+      isActive: true,
+      consentAccepted: true,
+      createdAt: nowTs(),
+    });
+    await db.collection("access_requests").doc("req_parent_a").set({
+      userId: "req_parent_a",
+      firstName: "Halima",
+      lastName: "Idriss",
+      fullName: "Halima Idriss",
+      email: "halima@ecole.dj",
+      phone: "+25377112233",
+      requestedRole: "parent",
+      schoolId: "school_a",
+      schoolName: "Collège de Boulaos",
+      schoolHint: "Collège de Boulaos",
+      status: "pending",
+      createdAt: nowTs(),
+    });
+    await db.collection("access_requests").doc("req_parent_b").set({
+      userId: "req_parent_b",
+      fullName: "Autre Parent",
+      email: "autre@ecole.dj",
+      requestedRole: "parent",
+      schoolId: "school_b",
+      schoolName: "École PK12",
+      schoolHint: "École PK12",
+      status: "pending",
+      createdAt: nowTs(),
+    });
+    await db.collection("access_requests").doc("req_dir_a").set({
+      userId: "req_dir_a",
+      fullName: "Futur Directeur",
+      email: "futurdir@ecole.dj",
+      requestedRole: "directeur",
+      schoolId: "school_a",
+      schoolName: "Collège de Boulaos",
+      schoolHint: "Collège de Boulaos",
+      status: "pending",
+      createdAt: nowTs(),
+    });
+  });
+
+  const unactivatedDb = testEnv.authenticatedContext("req_parent_a", { email: "halima@ecole.dj", email_verified: true }).firestore();
+  const dirDb = testEnv.authenticatedContext(DIRECTOR_UID, { email: "dir@ecole.dj", email_verified: true }).firestore();
+
+  // Unactivated user can read school_directory to select an authorized school, but cannot write to it or read school students
+  await assertSucceeds(unactivatedDb.collection("school_directory").get());
+  await assertFails(unactivatedDb.collection("school_directory").doc("fake_school").set({ name: "Fake" }));
+  await assertFails(unactivatedDb.collection("students").where("schoolId", "==", "school_a").get());
+
+  // Director can query scoped parent/enseignant/eleve requests for school_a
+  await assertSucceeds(
+    dirDb.collection("access_requests")
+      .where("schoolId", "==", "school_a")
+      .where("requestedRole", "in", ["parent", "enseignant", "eleve"])
+      .get()
+  );
+
+  // Director can request complementary information (info_requested)
+  await assertSucceeds(
+    dirDb.collection("access_requests").doc("req_parent_a").update({
+      status: "info_requested",
+      reviewerUid: DIRECTOR_UID,
+      reviewerName: "Directeur Boulaos",
+      reviewerRole: "directeur",
+      decisionNote: "Préciser le matricule de l'élève",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Applicant can respond & resubmit to pending, but cannot self-approve
+  await assertFails(
+    unactivatedDb.collection("access_requests").doc("req_parent_a").update({
+      status: "approved",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    unactivatedDb.collection("access_requests").doc("req_parent_a").update({
+      status: "pending",
+      applicantResponse: "Matricule DJ-101",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Director CANNOT read/approve requests for another school or requests for role 'directeur'
+  await assertFails(dirDb.collection("access_requests").doc("req_parent_b").get());
+  await assertFails(dirDb.collection("access_requests").doc("req_dir_a").get());
+  await assertFails(
+    dirDb.collection("access_requests").doc("req_dir_a").update({
+      status: "approved",
+      reviewerUid: DIRECTOR_UID,
+      updatedAt: nowTs(),
+    })
+  );
+});
+
+test("QR pairing & Connected Devices: approval links session, revocation blocks Web token immediately", async () => {
+  const futureExpiry = new Date(Date.now() + 120 * 1000);
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("users").doc(DIRECTOR_UID).set({
+      userId: DIRECTOR_UID,
+      fullName: "Directeur Boulaos",
+      role: "directeur",
+      schoolId: "school_a",
+      tenantId: "school_a",
+      isActive: true,
+      consentAccepted: true,
+      createdAt: nowTs(),
+    });
+    await db.collection("users").doc(TEACHER_UID).set({
+      userId: TEACHER_UID,
+      fullName: "Enseignant Boulaos",
+      role: "enseignant",
+      schoolId: "school_a",
+      tenantId: "school_a",
+      isActive: true,
+      consentAccepted: true,
+      createdAt: nowTs(),
+    });
+    await db.collection("schools").doc("school_a").set({
+      name: "Collège de Boulaos",
+      code: "COL-BL",
+      schoolType: "college",
+      regionId: "reg_1",
+      tenantId: "school_a",
+      nationalAdminUid: ADMIN_UID,
+      directorUid: DIRECTOR_UID,
+      isActive: true,
+      createdByUid: ADMIN_UID,
+      createdAt: nowTs(),
+    });
+    await db.collection("qr_pairing_requests").doc("qr_req_1").set({
+      requestId: "qr_req_1",
+      proofHash: "a".repeat(64),
+      status: "pending",
+      browserName: "Chrome",
+      osName: "Linux",
+      userAgentLabel: "Chrome sur Linux",
+      expiresAt: futureExpiry,
+      consumed: false,
+      createdAt: nowTs(),
+    });
+  });
+
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const dirDb = testEnv.authenticatedContext(DIRECTOR_UID).firestore();
+  const teacherDb = testEnv.authenticatedContext(TEACHER_UID).firestore();
+
+  // Unauthenticated client cannot read or list qr_pairing_requests or connected_devices
+  await assertFails(unauthDb.collection("qr_pairing_requests").doc("qr_req_1").get());
+  await assertFails(unauthDb.collection("connected_devices").get());
+
+  // Authenticated active mobile user cannot list qr_pairing_requests or tamper with proofHash
+  await assertFails(dirDb.collection("qr_pairing_requests").get());
+  await assertSucceeds(dirDb.collection("qr_pairing_requests").doc("qr_req_1").get());
+  await assertFails(
+    dirDb.collection("qr_pairing_requests").doc("qr_req_1").update({
+      status: "approved",
+      proofHash: "b".repeat(64),
+      approvedByUid: DIRECTOR_UID,
+      sessionId: "sess_web_1",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Mobile user atomically creates connected_devices/sess_web_1 and approves qr_pairing_requests/qr_req_1
+  const batch = dirDb.batch();
+  batch.set(dirDb.collection("connected_devices").doc("sess_web_1"), {
+    sessionId: "sess_web_1",
+    userId: DIRECTOR_UID,
+    userName: "Directeur Boulaos",
+    userRole: "directeur",
+    schoolId: "school_a",
+    tenantId: "school_a",
+    browserName: "Chrome",
+    osName: "Linux",
+    userAgentLabel: "Chrome sur Linux",
+    requestId: "qr_req_1",
+    revoked: false,
+    connectedAt: nowTs(),
+    lastActiveAt: nowTs(),
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  batch.update(dirDb.collection("qr_pairing_requests").doc("qr_req_1"), {
+    status: "approved",
+    approvedByUid: DIRECTOR_UID,
+    approvedByName: "Directeur Boulaos",
+    approvedByRole: "directeur",
+    sessionId: "sess_web_1",
+    approvedAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  await assertSucceeds(batch.commit());
+
+  // Another user cannot read or revoke Director's connected device
+  await assertFails(teacherDb.collection("connected_devices").doc("sess_web_1").get());
+  await assertFails(
+    teacherDb.collection("connected_devices").doc("sess_web_1").update({
+      revoked: true,
+      revokedByUid: TEACHER_UID,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Web session authenticated with custom claim deviceSessionId == "sess_web_1" can read protected school data while revoked == false
+  const webSessionDb = testEnv
+    .authenticatedContext(DIRECTOR_UID, { deviceSessionId: "sess_web_1" })
+    .firestore();
+  await assertSucceeds(webSessionDb.collection("schools").doc("school_a").get());
+
+  // Web session is NOT allowed to approve another QR pairing request or mint another device session
+  await assertFails(webSessionDb.collection("qr_pairing_requests").doc("qr_req_1").get());
+
+  // Mobile app revokes the Web session
+  await assertSucceeds(
+    dirDb.collection("connected_devices").doc("sess_web_1").update({
+      revoked: true,
+      revokedAt: nowTs(),
+      revokedByUid: DIRECTOR_UID,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Server-side enforcement: revoked Web session is immediately blocked from reading/writing protected data
+  await assertFails(webSessionDb.collection("schools").doc("school_a").get());
+  await assertFails(webSessionDb.collection("users").doc(DIRECTOR_UID).get());
+});
+
+test("Teacher attendance: Director writes/updates/deletes for own school, teacher reads own, parent denied", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("schools").doc("school_a").set({
+      name: "École A",
+      code: "EA",
+      schoolType: "primaire",
+      regionId: "reg_1",
+      tenantId: "school_a",
+      nationalAdminUid: ADMIN_UID,
+      directorUid: DIRECTOR_UID,
+      isActive: true,
+      createdByUid: ADMIN_UID,
+      createdAt: nowTs(),
+    });
+    await db.collection("users").doc(DIRECTOR_UID).set({
+      userId: DIRECTOR_UID,
+      fullName: "Directeur A",
+      role: "directeur",
+      schoolId: "school_a",
+      tenantId: "school_a",
+      isActive: true,
+      consentAccepted: true,
+      createdAt: nowTs(),
+    });
+    await db.collection("users").doc(TEACHER_UID).set({
+      userId: TEACHER_UID,
+      fullName: "Enseignant A",
+      role: "enseignant",
+      schoolId: "school_a",
+      tenantId: "school_a",
+      isActive: true,
+      consentAccepted: true,
+      createdAt: nowTs(),
+    });
+    await db.collection("users").doc(PARENT_A_UID).set({
+      userId: PARENT_A_UID,
+      fullName: "Parent A",
+      role: "parent",
+      schoolId: "school_a",
+      tenantId: "school_a",
+      isActive: true,
+      consentAccepted: true,
+      createdAt: nowTs(),
+    });
+  });
+
+  const dirDb = testEnv.authenticatedContext(DIRECTOR_UID).firestore();
+  const teacherDb = testEnv.authenticatedContext(TEACHER_UID).firestore();
+  const parentDb = testEnv.authenticatedContext(PARENT_A_UID).firestore();
+
+  // Director records teacher absence
+  await assertSucceeds(
+    dirDb.collection("teacher_attendance").doc("tatt_1").set({
+      schoolId: "school_a",
+      tenantId: "school_a",
+      regionId: "reg_1",
+      teacherUid: TEACHER_UID,
+      teacherName: "Enseignant A",
+      directorUid: DIRECTOR_UID,
+      nationalAdminUid: ADMIN_UID,
+      authorizedUids: [ADMIN_UID, DIRECTOR_UID, TEACHER_UID],
+      date: "2026-11-15",
+      status: "absent",
+      minutesLate: 0,
+      justified: false,
+      reason: "Absence matin",
+      createdByUid: DIRECTOR_UID,
+      createdAt: nowTs(),
+    })
+  );
+
+  // Teacher reads own attendance record, cannot create/modify/delete it
+  await assertSucceeds(teacherDb.collection("teacher_attendance").doc("tatt_1").get());
+  await assertFails(
+    teacherDb.collection("teacher_attendance").doc("tatt_1").update({
+      justified: true,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Parent cannot read or write teacher_attendance
+  await assertFails(parentDb.collection("teacher_attendance").doc("tatt_1").get());
+  await assertFails(parentDb.collection("teacher_attendance").get());
+
+  // Director updates and deletes record
+  await assertSucceeds(
+    dirDb.collection("teacher_attendance").doc("tatt_1").update({
+      status: "retard",
+      minutesLate: 20,
+      justified: true,
+      reason: "Justifié par certificat",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(dirDb.collection("teacher_attendance").doc("tatt_1").delete());
+});
+
+
+

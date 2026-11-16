@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -47,12 +48,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import com.example.R
 import com.example.auth.GoogleAuthManager
 import com.example.auth.PendingRegistrationDraft
+import com.example.data.catalog.OfficialSchoolEntry
 import com.example.data.model.RoleInvitation
+import com.example.data.model.SchoolDirectoryEntry
 import com.example.data.model.UserPrivateContact
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
@@ -117,11 +121,13 @@ fun OnboardingAndConsentGate(
     userEmail: String,
     userDisplayName: String,
     pendingDraft: PendingRegistrationDraft? = null,
+    schoolDirectory: List<SchoolDirectoryEntry> = emptyList(),
     isBusy: Boolean,
     errorMessage: String?,
     onBootstrapAdmin: (String, String, Boolean) -> Unit,
     onClaimInvitation: (RoleInvitation, String, String, Boolean) -> Unit,
-    onSubmitAccessRequest: (String, UserRole, String, String) -> Unit,
+    onSubmitAccessRequest: (String, String, UserRole, String, String, String, String, String) -> Unit,
+    onResubmitAccessRequest: (String, String, UserRole, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
     onSaveConsent: (String, String, String, String) -> Unit,
     onRefreshStatus: () -> Unit = {},
     onSignOut: () -> Unit
@@ -244,6 +250,18 @@ fun OnboardingAndConsentGate(
                             val initialName = pendingDraft?.fullName?.ifBlank { null } ?: userDisplayName.ifBlank { "" }
                             val initialPhone = pendingDraft?.phone ?: ""
                             val initialConsent = pendingDraft?.consentAccepted ?: false
+                            val extraSchoolEntries = remember(schoolDirectory) {
+                                schoolDirectory.map {
+                                    OfficialSchoolEntry(
+                                        id = it.schoolId.ifBlank { it.id },
+                                        name = it.name,
+                                        code = it.code,
+                                        schoolType = it.schoolType,
+                                        sector = it.sector.ifBlank { it.regionName },
+                                        address = it.address
+                                    )
+                                }
+                            }
 
                             var fullName by remember(pendingDraft) { mutableStateOf(initialName) }
                             var phone by remember(pendingDraft) { mutableStateOf(initialPhone) }
@@ -325,71 +343,213 @@ fun OnboardingAndConsentGate(
                                     Text("Initialiser l'Administrateur National")
                                 }
                             } else {
-                                val initialRole = pendingDraft?.role
-                                    ?.takeIf { it != UserRole.ADMIN_NATIONAL }
+                                val existingReq = gateState.accessRequest
+                                val fallbackParts = userDisplayName.trim().split(" ").filter { it.isNotBlank() }
+                                val initialFirst = existingReq?.firstName?.ifBlank { null }
+                                    ?: pendingDraft?.firstName?.ifBlank { null }
+                                    ?: fallbackParts.firstOrNull().orEmpty()
+                                val initialLast = existingReq?.lastName?.ifBlank { null }
+                                    ?: pendingDraft?.lastName?.ifBlank { null }
+                                    ?: fallbackParts.drop(1).joinToString(" ")
+                                val initialRole = existingReq?.requestedRole?.let { UserRole.fromKey(it) }
+                                    ?: pendingDraft?.role?.takeIf { it != UserRole.ADMIN_NATIONAL }
                                     ?: UserRole.PARENT
-                                var requestedRole by remember(pendingDraft) { mutableStateOf(initialRole) }
-                                var schoolHint by remember(pendingDraft) {
-                                    mutableStateOf(pendingDraft?.formattedSchoolHint() ?: "")
+                                var firstName by remember(pendingDraft, existingReq?.userId) { mutableStateOf(initialFirst) }
+                                var lastName by remember(pendingDraft, existingReq?.userId) { mutableStateOf(initialLast) }
+                                var reqPhone by remember(pendingDraft, existingReq?.phone) {
+                                    mutableStateOf(existingReq?.phone ?: pendingDraft?.phone ?: "")
+                                }
+                                var requestedRole by remember(pendingDraft, existingReq?.requestedRole) { mutableStateOf(initialRole) }
+                                var selectedSchoolId by remember(pendingDraft, existingReq?.schoolId) {
+                                    mutableStateOf(existingReq?.schoolId ?: pendingDraft?.schoolId ?: "")
+                                }
+                                var selectedSchoolName by remember(pendingDraft, existingReq?.schoolName) {
+                                    mutableStateOf(existingReq?.schoolName ?: pendingDraft?.schoolName ?: "")
+                                }
+                                var schoolHint by remember(pendingDraft, existingReq?.schoolHint) {
+                                    mutableStateOf(existingReq?.schoolHint ?: pendingDraft?.formattedSchoolHint() ?: "")
+                                }
+                                var extraDetails by remember(pendingDraft, existingReq?.extraDetails) {
+                                    mutableStateOf(existingReq?.extraDetails ?: pendingDraft?.extraDetail ?: "")
+                                }
+                                var applicantResponse by remember(existingReq?.applicantResponse) {
+                                    mutableStateOf(existingReq?.applicantResponse ?: "")
                                 }
                                 var showGateSchoolPicker by remember { mutableStateOf(false) }
 
+                                val requiresSchool = requestedRole == UserRole.DIRECTEUR ||
+                                    requestedRole == UserRole.ENSEIGNANT ||
+                                    requestedRole == UserRole.PARENT ||
+                                    requestedRole == UserRole.ELEVE
+                                val formValid = lastName.trim().length >= 2 &&
+                                    firstName.trim().length >= 2 &&
+                                    reqPhone.trim().length >= 4 &&
+                                    (!requiresSchool || selectedSchoolId.isNotBlank() || schoolHint.isNotBlank())
+
                                 Text(
-                                    text = if (pendingDraft != null) {
-                                        "Finaliser votre inscription (${requestedRole.labelFr})"
-                                    } else {
-                                        "Inscription et demande d'habilitation"
+                                    text = when {
+                                        existingReq?.status == "info_requested" -> "Informations complémentaires requises"
+                                        existingReq?.status == "rejected" -> "Demande d'accès refusée"
+                                        existingReq != null -> "Compte en attente de validation"
+                                        pendingDraft != null -> "Finaliser votre inscription (${requestedRole.labelFr})"
+                                        else -> "Création et validation du compte"
                                     },
                                     style = MaterialTheme.typography.headlineSmall
                                 )
                                 Text(
-                                    text = "Compte Google vérifié : $userEmail. Complétez ou confirmez vos informations ci-dessous pour rattacher votre compte à votre établissement.",
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    text = "Compte Google vérifié : $userEmail",
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
 
-                                if (gateState.accessRequest != null) {
-                                    val req = gateState.accessRequest
-                                    val statusLabel = when (req.status) {
-                                        "approved" -> "Approuvée (activation en cours)"
-                                        "rejected" -> "Refusée par l'administration"
-                                        else -> "En attente de validation par l'Administrateur National"
+                                if (existingReq != null) {
+                                    val reqRoleEnum = UserRole.fromKey(existingReq.requestedRole)
+                                    val competentAuthority = if (reqRoleEnum in listOf(UserRole.PARENT, UserRole.ENSEIGNANT, UserRole.ELEVE)) {
+                                        "Direction de ${existingReq.schoolName.ifBlank { "l'établissement" }}"
+                                    } else {
+                                        "Administration nationale"
                                     }
+                                    val (containerColor, contentColor, statusLabel) = when (existingReq.status) {
+                                        "approved" -> Triple(
+                                            MaterialTheme.colorScheme.primaryContainer,
+                                            MaterialTheme.colorScheme.onPrimaryContainer,
+                                            "Approuvée — Activation des autorisations en cours"
+                                        )
+                                        "rejected" -> Triple(
+                                            MaterialTheme.colorScheme.errorContainer,
+                                            MaterialTheme.colorScheme.onErrorContainer,
+                                            "Refusée par $competentAuthority"
+                                        )
+                                        "info_requested" -> Triple(
+                                            MaterialTheme.colorScheme.tertiaryContainer,
+                                            MaterialTheme.colorScheme.onTertiaryContainer,
+                                            "Compléments demandés par $competentAuthority"
+                                        )
+                                        else -> Triple(
+                                            MaterialTheme.colorScheme.secondaryContainer,
+                                            MaterialTheme.colorScheme.onSecondaryContainer,
+                                            "En attente (pending) — Aucun accès aux données scolaires"
+                                        )
+                                    }
+
                                     Surface(
-                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        color = containerColor,
                                         shape = MaterialTheme.shapes.small,
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Column(
                                             modifier = Modifier.padding(12.dp),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
                                             Row(
                                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                                                Icon(
+                                                    imageVector = if (existingReq.status == "rejected") Icons.Filled.Block else Icons.Filled.Info,
+                                                    contentDescription = null,
+                                                    tint = contentColor
+                                                )
                                                 Text(
-                                                    text = "Inscription enregistrée (${UserRole.fromKey(req.requestedRole).labelFr}) — Statut : $statusLabel",
-                                                    style = MaterialTheme.typography.bodySmall
+                                                    text = "${reqRoleEnum.labelFr} • $statusLabel",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = contentColor
                                                 )
                                             }
-                                            if (req.schoolHint.isNotBlank()) {
+                                            Text(
+                                                text = "Autorité de vérification : $competentAuthority",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = contentColor
+                                            )
+                                            if (existingReq.schoolName.isNotBlank() || existingReq.schoolHint.isNotBlank()) {
                                                 Text(
-                                                    text = "Rattachement demandé : ${req.schoolHint}",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                    text = "Établissement : ${existingReq.schoolName.ifBlank { existingReq.schoolHint }}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = contentColor
                                                 )
                                             }
-                                            if (req.status == "pending") {
+                                            if (existingReq.decisionNote.isNotBlank()) {
                                                 Text(
-                                                    text = "Dès que l'Administrateur National approuvera votre demande dans Établissements & Classes → Comptes & Invitations, l'activation de votre compte s'affichera automatiquement ici.",
+                                                    text = "Message de l'autorité (${existingReq.reviewerName.ifBlank { competentAuthority }}) : ${existingReq.decisionNote}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Medium,
+                                                    color = contentColor
+                                                )
+                                            }
+                                            if (existingReq.status == "pending") {
+                                                Text(
+                                                    text = "Votre compte est créé mais reste bloqué en statut « pending » jusqu'à l'approbation et l'attribution de vos rattachements par $competentAuthority.",
                                                     style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                    color = contentColor
                                                 )
                                             }
                                         }
                                     }
+
+                                    if (existingReq.status == "info_requested") {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            OutlinedTextField(
+                                                value = lastName,
+                                                onValueChange = { lastName = it.take(60) },
+                                                label = { Text("Nom *") },
+                                                singleLine = true,
+                                                modifier = Modifier.weight(1f).testTag("gate_lastname_input")
+                                            )
+                                            OutlinedTextField(
+                                                value = firstName,
+                                                onValueChange = { firstName = it.take(60) },
+                                                label = { Text("Prénom *") },
+                                                singleLine = true,
+                                                modifier = Modifier.weight(1f).testTag("gate_firstname_input")
+                                            )
+                                        }
+                                        OutlinedTextField(
+                                            value = reqPhone,
+                                            onValueChange = { reqPhone = it.take(40) },
+                                            label = { Text("Téléphone *") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth().testTag("gate_phone_input")
+                                        )
+                                        OutlinedButton(
+                                            onClick = { showGateSchoolPicker = true },
+                                            modifier = Modifier.fillMaxWidth().testTag("gate_open_school_picker_button")
+                                        ) {
+                                            Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.size(8.dp))
+                                            Text(selectedSchoolName.ifBlank { "Choisir votre établissement scolaire" })
+                                        }
+                                        OutlinedTextField(
+                                            value = applicantResponse,
+                                            onValueChange = { applicantResponse = it.take(500) },
+                                            label = { Text("Votre réponse / précisions demandées *") },
+                                            minLines = 2,
+                                            modifier = Modifier.fillMaxWidth().testTag("gate_applicant_response_input")
+                                        )
+                                        Button(
+                                            onClick = {
+                                                onResubmitAccessRequest(
+                                                    firstName,
+                                                    lastName,
+                                                    requestedRole,
+                                                    selectedSchoolId,
+                                                    selectedSchoolName,
+                                                    schoolHint,
+                                                    extraDetails,
+                                                    applicantResponse,
+                                                    reqPhone
+                                                )
+                                            },
+                                            enabled = !isBusy && formValid && applicantResponse.trim().length >= 3,
+                                            modifier = Modifier.fillMaxWidth().height(50.dp).testTag("resubmit_access_request_button")
+                                        ) {
+                                            Text("Compléter et renvoyer ma demande")
+                                        }
+                                    }
+
                                     OutlinedButton(
                                         onClick = onRefreshStatus,
                                         enabled = !isBusy,
@@ -400,14 +560,8 @@ fun OnboardingAndConsentGate(
                                         Text("Actualiser le statut de validation")
                                     }
                                 } else {
-                                    OutlinedTextField(
-                                        value = fullName,
-                                        onValueChange = { fullName = it },
-                                        label = { Text("Nom complet") },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
                                     DropdownSelector(
-                                        label = "Rôle demandé",
+                                        label = "Fonction demandée *",
                                         options = listOf(
                                             UserRole.PARENT,
                                             UserRole.ENSEIGNANT,
@@ -419,29 +573,77 @@ fun OnboardingAndConsentGate(
                                         optionLabel = { it.labelFr },
                                         onOptionSelected = { requestedRole = it }
                                     )
-                                    OutlinedTextField(
-                                        value = schoolHint,
-                                        onValueChange = { schoolHint = it.take(160) },
-                                        label = { Text("Établissement / Région / Détails") },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                    OutlinedButton(
-                                        onClick = { showGateSchoolPicker = true },
-                                        modifier = Modifier.fillMaxWidth()
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.size(8.dp))
-                                        Text("Choisir une école, collège ou lycée (Djibouti-Ville)")
+                                        OutlinedTextField(
+                                            value = lastName,
+                                            onValueChange = { lastName = it.take(60) },
+                                            label = { Text("Nom *") },
+                                            singleLine = true,
+                                            modifier = Modifier.weight(1f).testTag("gate_lastname_input")
+                                        )
+                                        OutlinedTextField(
+                                            value = firstName,
+                                            onValueChange = { firstName = it.take(60) },
+                                            label = { Text("Prénom *") },
+                                            singleLine = true,
+                                            modifier = Modifier.weight(1f).testTag("gate_firstname_input")
+                                        )
                                     }
                                     OutlinedTextField(
-                                        value = phone,
-                                        onValueChange = { phone = it.take(40) },
-                                        label = { Text("Téléphone") },
-                                        modifier = Modifier.fillMaxWidth()
+                                        value = reqPhone,
+                                        onValueChange = { reqPhone = it.take(40) },
+                                        label = { Text("Téléphone *") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth().testTag("gate_phone_input")
+                                    )
+                                    if (requiresSchool) {
+                                        OutlinedButton(
+                                            onClick = { showGateSchoolPicker = true },
+                                            modifier = Modifier.fillMaxWidth().testTag("gate_open_school_picker_button")
+                                        ) {
+                                            Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.size(8.dp))
+                                            Text(selectedSchoolName.ifBlank { "Choisir votre établissement scolaire *" })
+                                        }
+                                    } else {
+                                        OutlinedTextField(
+                                            value = schoolHint,
+                                            onValueChange = { schoolHint = it.take(160) },
+                                            label = { Text("Région ou direction *") },
+                                            modifier = Modifier.fillMaxWidth().testTag("gate_region_input")
+                                        )
+                                    }
+                                    OutlinedTextField(
+                                        value = extraDetails,
+                                        onValueChange = { extraDetails = it.take(250) },
+                                        label = {
+                                            Text(
+                                                when (requestedRole) {
+                                                    UserRole.PARENT -> "Nom(s) et classe(s) de vos enfants"
+                                                    UserRole.ENSEIGNANT -> "Classe(s) et matière(s) enseignées"
+                                                    else -> "Précisions complémentaires (optionnel)"
+                                                }
+                                            )
+                                        },
+                                        modifier = Modifier.fillMaxWidth().testTag("gate_extra_input")
                                     )
                                     Button(
-                                        onClick = { onSubmitAccessRequest(fullName, requestedRole, schoolHint, phone) },
-                                        enabled = !isBusy && fullName.trim().length >= 2,
+                                        onClick = {
+                                            onSubmitAccessRequest(
+                                                firstName,
+                                                lastName,
+                                                requestedRole,
+                                                selectedSchoolId,
+                                                selectedSchoolName,
+                                                schoolHint,
+                                                extraDetails,
+                                                reqPhone
+                                            )
+                                        },
+                                        enabled = !isBusy && formValid,
                                         modifier = Modifier.fillMaxWidth().height(50.dp).testTag("submit_access_request_button")
                                     ) {
                                         Text("Envoyer ma demande d'inscription")
@@ -450,8 +652,11 @@ fun OnboardingAndConsentGate(
 
                                 if (showGateSchoolPicker) {
                                     OfficialSchoolPickerDialog(
+                                        extraEntries = extraSchoolEntries,
                                         onDismiss = { showGateSchoolPicker = false },
                                         onSelectSchool = { entry ->
+                                            selectedSchoolId = entry.id
+                                            selectedSchoolName = entry.name
                                             schoolHint = "${entry.name} (${entry.levelLabelFr})".take(160)
                                             showGateSchoolPicker = false
                                         }

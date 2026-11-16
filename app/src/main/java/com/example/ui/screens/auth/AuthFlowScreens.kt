@@ -497,15 +497,27 @@ private fun RoleSignUpScreen(
     onSubmitGoogleRegistration: (PendingRegistrationDraft) -> Unit
 ) {
     var selectedRole by remember(category) { mutableStateOf(category.defaultRole) }
-    var fullName by remember(category) { mutableStateOf("") }
+    var lastName by remember(category) { mutableStateOf("") }
+    var firstName by remember(category) { mutableStateOf("") }
+    var emailHint by remember(category) { mutableStateOf("") }
     var phone by remember(category) { mutableStateOf("") }
+    var selectedSchoolId by remember(category) { mutableStateOf("") }
+    var selectedSchoolName by remember(category) { mutableStateOf("") }
     var schoolOrRegionHint by remember(category) { mutableStateOf("") }
     var extraDetail by remember(category) { mutableStateOf("") }
     var consentAccepted by remember(category) { mutableStateOf(false) }
     var showSchoolPicker by remember { mutableStateOf(false) }
 
     val accent = category.accentColor()
-    val isFormValid = fullName.trim().length >= 2 && consentAccepted
+    val requiresAuthorizedSchool = selectedRole == UserRole.DIRECTEUR ||
+        selectedRole == UserRole.ENSEIGNANT ||
+        selectedRole == UserRole.PARENT
+    val schoolReady = if (requiresAuthorizedSchool) selectedSchoolId.isNotBlank() else schoolOrRegionHint.trim().length >= 2
+    val isFormValid = lastName.trim().length >= 2 &&
+        firstName.trim().length >= 2 &&
+        phone.trim().length >= 4 &&
+        schoolReady &&
+        consentAccepted
 
     Column(
         modifier = Modifier
@@ -583,7 +595,7 @@ private fun RoleSignUpScreen(
 
         if (category == RegistrationCategory.ADMIN) {
             DropdownSelector(
-                label = "Niveau d'administration",
+                label = "Fonction demandée *",
                 options = listOf(
                     UserRole.DIRECTEUR,
                     UserRole.ADMIN_REGIONAL,
@@ -593,27 +605,53 @@ private fun RoleSignUpScreen(
                 optionLabel = { it.labelFr },
                 onOptionSelected = { selectedRole = it }
             )
+        } else {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Fonction : ${selectedRole.labelFr}",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(10.dp)
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = lastName,
+                onValueChange = { lastName = it.take(60) },
+                label = { Text("Nom *") },
+                singleLine = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("signup_lastname_input")
+            )
+            OutlinedTextField(
+                value = firstName,
+                onValueChange = { firstName = it.take(60) },
+                label = { Text("Prénom *") },
+                singleLine = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("signup_firstname_input")
+            )
         }
 
         OutlinedTextField(
-            value = fullName,
-            onValueChange = { fullName = it },
-            label = { Text("Nom complet *") },
-            singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("signup_fullname_input")
-        )
-
-        OutlinedTextField(
             value = phone,
-            onValueChange = { phone = it },
+            onValueChange = { phone = it.take(40) },
             label = {
                 Text(
                     when (category) {
-                        RegistrationCategory.ADMIN -> "Téléphone professionnel"
-                        RegistrationCategory.ENSEIGNANT -> "Téléphone"
-                        RegistrationCategory.PARENT -> "Téléphone / WhatsApp"
+                        RegistrationCategory.ADMIN -> "Téléphone professionnel *"
+                        RegistrationCategory.ENSEIGNANT -> "Téléphone *"
+                        RegistrationCategory.PARENT -> "Téléphone / WhatsApp *"
                     }
                 )
             },
@@ -624,42 +662,82 @@ private fun RoleSignUpScreen(
         )
 
         OutlinedTextField(
-            value = schoolOrRegionHint,
-            onValueChange = { schoolOrRegionHint = it },
-            label = {
-                Text(
-                    when (category) {
-                        RegistrationCategory.ADMIN -> "Établissement, région ou direction"
-                        RegistrationCategory.ENSEIGNANT -> "Établissement scolaire d'affectation"
-                        RegistrationCategory.PARENT -> "Établissement scolaire de l'enfant"
-                    }
-                )
-            },
+            value = emailHint,
+            onValueChange = { emailHint = it.take(120) },
+            label = { Text("Adresse e-mail Google") },
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .testTag("signup_school_input")
+                .testTag("signup_email_input")
         )
 
-        OutlinedButton(
-            onClick = { showSchoolPicker = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("signup_open_school_picker_button")
-        ) {
-            Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.size(8.dp))
-            Text("Choisir une école, collège ou lycée (Djibouti-Ville)")
+        if (requiresAuthorizedSchool) {
+            OutlinedCard(
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(
+                    1.dp,
+                    if (selectedSchoolId.isNotBlank()) accent else MaterialTheme.colorScheme.outline
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = if (selectedSchoolName.isNotBlank()) {
+                            selectedSchoolName
+                        } else {
+                            "Aucun établissement scolaire sélectionné *"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (selectedSchoolId.isNotBlank()) {
+                            "Structure autorisée sélectionnée ($schoolOrRegionHint)"
+                        } else {
+                            "Sélection obligatoire depuis le répertoire officiel des écoles, collèges et lycées."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = { showSchoolPicker = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("signup_open_school_picker_button")
+                    ) {
+                        Icon(Icons.Filled.School, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            if (selectedSchoolId.isBlank()) "Choisir votre établissement scolaire *"
+                            else "Changer d'établissement"
+                        )
+                    }
+                }
+            }
+        } else {
+            OutlinedTextField(
+                value = schoolOrRegionHint,
+                onValueChange = { schoolOrRegionHint = it.take(160) },
+                label = { Text("Direction régionale ou service national *") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("signup_school_input")
+            )
         }
 
         OutlinedTextField(
             value = extraDetail,
-            onValueChange = { extraDetail = it },
+            onValueChange = { extraDetail = it.take(250) },
             label = {
                 Text(
                     when (category) {
-                        RegistrationCategory.ADMIN -> "Fonction ou service (optionnel)"
-                        RegistrationCategory.ENSEIGNANT -> "Matière(s) et classe(s) enseignées"
+                        RegistrationCategory.ADMIN -> "Précisions / service (optionnel)"
+                        RegistrationCategory.ENSEIGNANT -> "Classe(s) et matière(s) enseignées"
                         RegistrationCategory.PARENT -> "Nom(s) et classe(s) de votre/vos enfant(s)"
                     }
                 )
@@ -669,6 +747,24 @@ private fun RoleSignUpScreen(
                 .fillMaxWidth()
                 .testTag("signup_extra_input")
         )
+
+        Surface(
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = when (selectedRole) {
+                    UserRole.PARENT, UserRole.ENSEIGNANT ->
+                        "Circuit de validation : compte créé en statut « en attente » (aucune donnée scolaire accessible), puis vérifié par la Direction de votre établissement."
+                    else ->
+                        "Circuit de validation : compte créé en statut « en attente », puis vérifié par l'Administration nationale."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(10.dp)
+            )
+        }
 
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
@@ -700,8 +796,12 @@ private fun RoleSignUpScreen(
                     PendingRegistrationDraft(
                         category = category,
                         role = selectedRole,
-                        fullName = fullName.trim(),
+                        lastName = lastName.trim(),
+                        firstName = firstName.trim(),
+                        emailHint = emailHint.trim(),
                         phone = phone.trim(),
+                        schoolId = selectedSchoolId,
+                        schoolName = selectedSchoolName,
                         schoolOrRegionHint = schoolOrRegionHint.trim(),
                         extraDetail = extraDetail.trim(),
                         consentAccepted = consentAccepted
@@ -738,6 +838,8 @@ private fun RoleSignUpScreen(
         OfficialSchoolPickerDialog(
             onDismiss = { showSchoolPicker = false },
             onSelectSchool = { entry ->
+                selectedSchoolId = entry.id
+                selectedSchoolName = entry.name
                 schoolOrRegionHint = "${entry.name} (${entry.levelLabelFr})"
                 showSchoolPicker = false
             }

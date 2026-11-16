@@ -48,6 +48,7 @@ data class UserProfile(
     val regionalAdminUid: String = "",
     val directorUid: String = "",
     val classIds: List<String> = emptyList(),
+    val subjectIds: List<String> = emptyList(),
     val studentIds: List<String> = emptyList(),
     @get:PropertyName("isActive")
     @field:PropertyName("isActive")
@@ -87,6 +88,7 @@ data class RoleInvitation(
     val regionalAdminUid: String = "",
     val directorUid: String = "",
     val classIds: List<String> = emptyList(),
+    val subjectIds: List<String> = emptyList(),
     val studentIds: List<String> = emptyList(),
     val phone: String = "",
     val status: String = "pending",
@@ -100,13 +102,40 @@ data class RoleInvitation(
 data class AccessRequest(
     @DocumentId val id: String = "",
     val userId: String = "",
+    val firstName: String = "",
+    val lastName: String = "",
     val fullName: String = "",
     val email: String = "",
     val requestedRole: String = UserRole.PARENT.key,
+    val schoolId: String = "",
+    val schoolName: String = "",
     val schoolHint: String = "",
+    val extraDetails: String = "",
+    val applicantResponse: String = "",
     val phone: String = "",
     val status: String = "pending",
     val reviewerUid: String = "",
+    val reviewerName: String = "",
+    val reviewerRole: String = "",
+    val decisionNote: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@IgnoreExtraProperties
+data class SchoolDirectoryEntry(
+    @DocumentId val id: String = "",
+    val schoolId: String = "",
+    val name: String = "",
+    val code: String = "",
+    val schoolType: String = "primaire",
+    val regionId: String = "",
+    val regionName: String = "",
+    val sector: String = "",
+    val address: String = "",
+    @get:PropertyName("isActive")
+    @field:PropertyName("isActive")
+    val isActive: Boolean = true,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -139,6 +168,8 @@ data class School(
     val city: String = "Djibouti-Ville",
     val country: String = "Djibouti",
     val description: String = "",
+    val phone: String = "",
+    val email: String = "",
     @get:PropertyName("isOfficialCatalog")
     @field:PropertyName("isOfficialCatalog")
     val isOfficialCatalog: Boolean = false,
@@ -239,6 +270,11 @@ data class Student(
     val matricule: String = "",
     val dateOfBirth: String = "",
     val gender: String = "M",
+    val academicYear: String = "2026-2027",
+    val legalGuardianName: String = "",
+    val legalGuardianPhone: String = "",
+    val legalGuardianRelation: String = "",
+    val academicHistory: String = "",
     val parentUids: List<String> = emptyList(),
     val studentUid: String = "",
     val gradesVisibleToStudent: Boolean = true,
@@ -256,3 +292,45 @@ data class Student(
 ) {
     val fullName: String get() = "$firstName $lastName".trim()
 }
+
+@IgnoreExtraProperties
+data class QrPairingRequest(
+    @DocumentId val id: String = "",
+    val requestId: String = "",
+    val proofHash: String = "",
+    val status: String = "pending",
+    val browserName: String = "",
+    val osName: String = "",
+    val userAgentLabel: String = "",
+    val expiresAt: Timestamp? = null,
+    val consumed: Boolean = false,
+    val approvedByUid: String = "",
+    val approvedByName: String = "",
+    val approvedByRole: String = "",
+    val sessionId: String = "",
+    @ServerTimestamp val approvedAt: Timestamp? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@IgnoreExtraProperties
+data class ConnectedDeviceSession(
+    @DocumentId val id: String = "",
+    val sessionId: String = "",
+    val userId: String = "",
+    val userName: String = "",
+    val userRole: String = UserRole.PARENT.key,
+    val schoolId: String = "",
+    val tenantId: String = "",
+    val browserName: String = "",
+    val osName: String = "",
+    val userAgentLabel: String = "",
+    val requestId: String = "",
+    val revoked: Boolean = false,
+    val revokedAt: Timestamp? = null,
+    val revokedByUid: String = "",
+    @ServerTimestamp val connectedAt: Timestamp? = null,
+    @ServerTimestamp val lastActiveAt: Timestamp? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)

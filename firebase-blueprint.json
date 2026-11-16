@@ -43,6 +43,7 @@
         "regionalAdminUid": { "type": "string" },
         "directorUid": { "type": "string" },
         "classIds": { "type": "array" },
+        "subjectIds": { "type": "array" },
         "studentIds": { "type": "array" },
         "isActive": { "type": "boolean" },
         "consentAccepted": { "type": "boolean" },
@@ -84,6 +85,7 @@
         "regionalAdminUid": { "type": "string" },
         "directorUid": { "type": "string" },
         "classIds": { "type": "array" },
+        "subjectIds": { "type": "array" },
         "studentIds": { "type": "array" },
         "phone": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "claimed", "revoked"] },
@@ -100,17 +102,45 @@
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
         "fullName": { "type": "string" },
         "email": { "type": "string" },
         "requestedRole": { "type": "string", "enum": ["admin_regional", "directeur", "enseignant", "parent", "eleve"] },
+        "schoolId": { "type": "string" },
+        "schoolName": { "type": "string" },
         "schoolHint": { "type": "string" },
+        "extraDetails": { "type": "string" },
+        "applicantResponse": { "type": "string" },
         "phone": { "type": "string" },
-        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "info_requested"] },
         "reviewerUid": { "type": "string" },
+        "reviewerName": { "type": "string" },
+        "reviewerRole": { "type": "string" },
+        "decisionNote": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "fullName", "email", "requestedRole", "status", "createdAt"]
+    },
+    "SchoolDirectoryEntry": {
+      "title": "SchoolDirectoryEntry",
+      "description": "Répertoire public non sensible des établissements autorisés (sélection à l'inscription).",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "schoolType": { "type": "string", "enum": ["primaire", "college", "lycee"] },
+        "regionId": { "type": "string" },
+        "regionName": { "type": "string" },
+        "sector": { "type": "string" },
+        "address": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "name", "code", "schoolType", "isActive", "createdAt"]
     },
     "Region": {
       "title": "Region",
@@ -145,6 +175,8 @@
         "city": { "type": "string", "description": "Ville d'implantation (ex: Djibouti-Ville)." },
         "country": { "type": "string", "description": "Pays (Djibouti)." },
         "description": { "type": "string", "description": "Description ou mention historique de l'établissement." },
+        "phone": { "type": "string", "description": "Numéro de téléphone officiel de l'établissement." },
+        "email": { "type": "string", "description": "Adresse e-mail officielle de l'établissement." },
         "isOfficialCatalog": { "type": "boolean", "description": "Indique si le document a été initialisé depuis le référentiel officiel de Djibouti." },
         "nationalAdminUid": { "type": "string" },
         "regionalAdminUid": { "type": "string" },
@@ -253,6 +285,11 @@
         "matricule": { "type": "string" },
         "dateOfBirth": { "type": "string" },
         "gender": { "type": "string", "enum": ["M", "F"] },
+        "academicYear": { "type": "string" },
+        "legalGuardianName": { "type": "string" },
+        "legalGuardianPhone": { "type": "string" },
+        "legalGuardianRelation": { "type": "string" },
+        "academicHistory": { "type": "string" },
         "parentUids": { "type": "array" },
         "studentUid": { "type": "string" },
         "gradesVisibleToStudent": { "type": "boolean" },
@@ -521,6 +558,79 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["actorUid", "actorRole", "action", "targetType", "targetId", "details", "createdAt"]
+    },
+    "QrPairingRequest": {
+      "title": "QrPairingRequest",
+      "description": "Demande temporaire d'association Web via QR Code (jeton opaque 120s à usage unique).",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string" },
+        "proofHash": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "expired", "consumed"] },
+        "browserName": { "type": "string" },
+        "osName": { "type": "string" },
+        "userAgentLabel": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "consumed": { "type": "boolean" },
+        "approvedByUid": { "type": "string" },
+        "approvedByName": { "type": "string" },
+        "approvedByRole": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["requestId", "proofHash", "status", "expiresAt", "consumed", "createdAt"]
+    },
+    "ConnectedDeviceSession": {
+      "title": "ConnectedDeviceSession",
+      "description": "Session Web associée à un compte utilisateur avec révocation serveur immédiate.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string", "enum": ["admin_national", "admin_regional", "directeur", "enseignant", "parent", "eleve"] },
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "browserName": { "type": "string" },
+        "osName": { "type": "string" },
+        "userAgentLabel": { "type": "string" },
+        "requestId": { "type": "string" },
+        "revoked": { "type": "boolean" },
+        "revokedAt": { "type": "string", "format": "date-time" },
+        "revokedByUid": { "type": "string" },
+        "connectedAt": { "type": "string", "format": "date-time" },
+        "lastActiveAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sessionId", "userId", "userRole", "browserName", "osName", "revoked", "connectedAt", "lastActiveAt", "createdAt"]
+    },
+    "TeacherAttendanceRecord": {
+      "title": "TeacherAttendanceRecord",
+      "description": "Enregistrement des présences, absences et retards des enseignants géré par la Direction.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "regionId": { "type": "string" },
+        "teacherUid": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "directorUid": { "type": "string" },
+        "regionalAdminUid": { "type": "string" },
+        "nationalAdminUid": { "type": "string" },
+        "authorizedUids": { "type": "array" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["present", "absent", "retard"] },
+        "minutesLate": { "type": "integer" },
+        "justified": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["schoolId", "teacherUid", "date", "status", "justified", "directorUid", "createdByUid", "createdAt"]
     }
   },
   "firestore": {
@@ -543,6 +653,10 @@
     "/access_requests/{requestId}": {
       "schema": { "$ref": "#/entities/AccessRequest" },
       "description": "Demandes d'accès en attente de validation."
+    },
+    "/school_directory/{schoolId}": {
+      "schema": { "$ref": "#/entities/SchoolDirectoryEntry" },
+      "description": "Annuaire des établissements autorisés accessible après authentification Google pour le rattachement initial."
     },
     "/regions/{regionId}": {
       "schema": { "$ref": "#/entities/Region" },
@@ -603,6 +717,18 @@
     "/audit_logs/{logId}": {
       "schema": { "$ref": "#/entities/AuditLog" },
       "description": "Journal d'audit immuable des opérations sensibles."
+    },
+    "/qr_pairing_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/QrPairingRequest" },
+      "description": "Demandes temporaires d'association QR Web."
+    },
+    "/connected_devices/{sessionId}": {
+      "schema": { "$ref": "#/entities/ConnectedDeviceSession" },
+      "description": "Sessions Web actives ou révoquées par appareil."
+    },
+    "/teacher_attendance/{recordId}": {
+      "schema": { "$ref": "#/entities/TeacherAttendanceRecord" },
+      "description": "Assiduité des enseignants suivie par la Direction."
     }
   }
 }

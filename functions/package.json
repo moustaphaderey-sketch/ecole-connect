@@ -1,0 +1,16 @@
+{
+  "name": "ecole-connectee-functions",
+  "version": "1.0.0",
+  "description": "Cloud Functions pour l'association QR Code sécurisée et la révocation des sessions Web ÉCOLE CONNECTÉE",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "test": "node --test qr_pairing.test.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^5.1.1"
+  }
+}

@@ -89,7 +89,9 @@ internal fun EditSchoolDialog(
         address: String,
         sector: String,
         description: String,
-        isActive: Boolean
+        isActive: Boolean,
+        phone: String,
+        email: String
     ) -> Unit
 ) {
     var selectedRegion by remember(school.id, regions) {
@@ -100,6 +102,8 @@ internal fun EditSchoolDialog(
     var schoolType by remember(school.id) { mutableStateOf(school.schoolType.ifBlank { "primaire" }) }
     var address by remember(school.id) { mutableStateOf(school.address) }
     var sector by remember(school.id) { mutableStateOf(school.sector) }
+    var phone by remember(school.id) { mutableStateOf(school.phone) }
+    var email by remember(school.id) { mutableStateOf(school.email) }
     var description by remember(school.id) { mutableStateOf(school.description) }
     var isActive by remember(school.id) { mutableStateOf(school.isActive) }
 
@@ -158,6 +162,18 @@ internal fun EditSchoolDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
+                    value = phone,
+                    onValueChange = { phone = it },
+                    label = { Text("Téléphone de l'établissement") },
+                    modifier = Modifier.fillMaxWidth().testTag("edit_school_phone_input")
+                )
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("E-mail de l'établissement") },
+                    modifier = Modifier.fillMaxWidth().testTag("edit_school_email_input")
+                )
+                OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
                     label = { Text("Description") },
@@ -180,7 +196,7 @@ internal fun EditSchoolDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onSubmit(selectedRegion, name, code, schoolType, address, sector, description, isActive) },
+                onClick = { onSubmit(selectedRegion, name, code, schoolType, address, sector, description, isActive, phone, email) },
                 enabled = name.trim().length >= 2 && code.trim().isNotBlank(),
                 modifier = Modifier.testTag("save_edit_school_button")
             ) {
@@ -435,7 +451,12 @@ internal fun EditStudentDialog(
         dateOfBirth: String,
         gender: String,
         gradesVisibleToStudent: Boolean,
-        isActive: Boolean
+        isActive: Boolean,
+        academicYear: String,
+        legalGuardianName: String,
+        legalGuardianPhone: String,
+        legalGuardianRelation: String,
+        academicHistory: String
     ) -> Unit
 ) {
     val schoolClasses = remember(classes, student.schoolId) {
@@ -449,6 +470,11 @@ internal fun EditStudentDialog(
     var matricule by remember(student.id) { mutableStateOf(student.matricule) }
     var dob by remember(student.id) { mutableStateOf(student.dateOfBirth) }
     var gender by remember(student.id) { mutableStateOf(student.gender.ifBlank { "M" }) }
+    var academicYear by remember(student.id) { mutableStateOf(student.academicYear.ifBlank { "2026-2027" }) }
+    var guardianName by remember(student.id) { mutableStateOf(student.legalGuardianName) }
+    var guardianPhone by remember(student.id) { mutableStateOf(student.legalGuardianPhone) }
+    var guardianRelation by remember(student.id) { mutableStateOf(student.legalGuardianRelation) }
+    var academicHistory by remember(student.id) { mutableStateOf(student.academicHistory) }
     var gradesVisible by remember(student.id) { mutableStateOf(student.gradesVisibleToStudent) }
     var isActive by remember(student.id) { mutableStateOf(student.isActive) }
 
@@ -500,6 +526,37 @@ internal fun EditStudentDialog(
                     optionLabel = { if (it == "M") "Masculin" else "Féminin" },
                     onOptionSelected = { gender = it }
                 )
+                OutlinedTextField(
+                    value = academicYear,
+                    onValueChange = { academicYear = it },
+                    label = { Text("Année scolaire") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = guardianName,
+                    onValueChange = { guardianName = it },
+                    label = { Text("Responsable légal (nom)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = guardianPhone,
+                    onValueChange = { guardianPhone = it },
+                    label = { Text("Téléphone du responsable") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = guardianRelation,
+                    onValueChange = { guardianRelation = it },
+                    label = { Text("Lien de parenté (Père, Mère, Tuteur)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = academicHistory,
+                    onValueChange = { academicHistory = it },
+                    label = { Text("Historique scolaire") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -521,7 +578,10 @@ internal fun EditStudentDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    onSubmit(selectedClass, firstName, lastName, matricule, dob, gender, gradesVisible, isActive)
+                    onSubmit(
+                        selectedClass, firstName, lastName, matricule, dob, gender,
+                        gradesVisible, isActive, academicYear, guardianName, guardianPhone, guardianRelation, academicHistory
+                    )
                 },
                 enabled = firstName.trim().isNotBlank() && lastName.trim().isNotBlank() && matricule.trim().isNotBlank(),
                 modifier = Modifier.testTag("save_edit_student_button")

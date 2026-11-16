@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ÉCOLE CONNECTÉE — Plateforme Web</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main id="qr-login-view" class="qr-landing">
+    <section class="qr-card" aria-live="polite">
+      <div class="brand-logo" aria-hidden="true">
+        <svg viewBox="0 0 64 64" width="60" height="60" fill="none">
+          <rect width="64" height="64" rx="18" fill="#1E3A8A" />
+          <path d="M32 14L12 24L32 34L52 24L32 14Z" fill="#FFFFFF" />
+          <path d="M20 29V41C20 45.5 25.4 49 32 49C38.6 49 44 45.5 44 41V29L32 35L20 29Z" fill="#93C5FD" />
+          <circle cx="50" cy="40" r="4" fill="#10B981" />
+        </svg>
+        <span class="brand-name">ÉCOLE CONNECTÉE</span>
+      </div>
+
+      <h1 class="qr-title">Bienvenue sur ÉCOLE CONNECTÉE</h1>
+      <p class="qr-subtitle">Connectez-vous en scannant le QR Code avec votre application Android</p>
+
+      <div class="qr-frame-wrap">
+        <div id="qr-svg-container" class="qr-box">
+          <div class="qr-skeleton">Génération du QR Code...</div>
+        </div>
+        <div id="qr-countdown" class="qr-countdown">120 s</div>
+      </div>
+
+      <div id="qr-status-pill" class="status-pill status-pending">
+        <span class="pulse-dot"></span>
+        <span id="qr-status-text">Connexion en attente...</span>
+      </div>
+
+      <button id="qr-refresh-btn" class="btn-primary hidden" type="button">
+        Générer un nouveau QR Code
+      </button>
+
+      <ol class="qr-instructions">
+        <li>Ouvrez l'application Android <strong>ÉCOLE CONNECTÉE</strong> sur votre téléphone.</li>
+        <li>Ouvrez le menu puis sélectionnez <strong>Appareils connectés</strong>.</li>
+        <li>Appuyez sur <strong>Connecter un appareil</strong> et scannez ce QR Code (usage unique, validité 120 secondes).</li>
+      </ol>
+    </section>
+  </main>
+
+  <section id="app-shell" class="app-shell hidden">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <svg viewBox="0 0 64 64" width="36" height="36" fill="none" aria-hidden="true">
+          <rect width="64" height="64" rx="14" fill="#1E3A8A" />
+          <path d="M32 14L12 24L32 34L52 24L32 14Z" fill="#FFFFFF" />
+          <path d="M20 29V41C20 45.5 25.4 49 32 49C38.6 49 44 45.5 44 41V29L32 35L20 29Z" fill="#93C5FD" />
+        </svg>
+        <div>
+          <div class="topbar-title">ÉCOLE CONNECTÉE</div>
+          <div id="topbar-user-meta" class="topbar-subtitle"></div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="topbar-role-badge" class="role-badge"></span>
+        <button id="web-signout-btn" class="btn-outline" type="button">Déconnexion</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <nav id="role-sidebar" class="sidebar" aria-label="Navigation principale"></nav>
+      <main id="dashboard-content" class="dashboard-content"></main>
+    </div>
+  </section>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

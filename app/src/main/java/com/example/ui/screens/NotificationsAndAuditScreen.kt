@@ -41,6 +41,9 @@ import com.example.data.model.NotificationItem
 import com.example.data.model.PlatformSettings
 import com.example.data.model.Region
 import com.example.data.model.School
+import com.example.data.model.SchoolClass
+import com.example.data.model.Student
+import com.example.data.model.Subject
 import com.example.data.model.UserPrivateContact
 import com.example.data.model.UserProfile
 import com.example.data.model.UserRole
@@ -60,10 +63,15 @@ fun NotificationsAndAuditScreen(
     accessRequests: List<AccessRequest> = emptyList(),
     regions: List<Region> = emptyList(),
     schools: List<School> = emptyList(),
+    classes: List<SchoolClass> = emptyList(),
+    subjects: List<Subject> = emptyList(),
+    students: List<Student> = emptyList(),
     onMarkNotificationRead: (String) -> Unit,
-    onApproveAccessRequest: (AccessRequest, UserRole, String, School?) -> Unit = { _, _, _, _ -> },
-    onRejectAccessRequest: (AccessRequest) -> Unit = {},
+    onApproveAccessRequest: (AccessRequest, UserRole, String, School?, List<String>, List<String>, List<String>, String) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onRequestMoreInfoAccessRequest: (AccessRequest, String) -> Unit = { _, _ -> },
+    onRejectAccessRequest: (AccessRequest, String) -> Unit = { _, _ -> },
     onOpenApprovals: () -> Unit = {},
+    onOpenAdminTab: (String) -> Unit = {},
     onSavePreferences: (String, String, String, String) -> Unit
 ) {
     val role = profile.roleEnum()
@@ -75,11 +83,20 @@ fun NotificationsAndAuditScreen(
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var approveRequestTarget by remember { mutableStateOf<AccessRequest?>(null) }
+    var requestInfoTarget by remember { mutableStateOf<AccessRequest?>(null) }
+    var rejectRequestTarget by remember { mutableStateOf<AccessRequest?>(null) }
     val safeIndex = selectedTabIndex.coerceIn(0, tabs.lastIndex)
     val activeTab = tabs[safeIndex]
     val pendingRequests = remember(role, accessRequests) {
-        if (role == UserRole.ADMIN_NATIONAL) accessRequests.filter { it.status == "pending" }
-        else emptyList()
+        val actionableStatuses = setOf("pending", "info_requested")
+        when (role) {
+            UserRole.ADMIN_NATIONAL -> accessRequests.filter { it.status in actionableStatuses }
+            UserRole.DIRECTEUR -> accessRequests.filter {
+                it.status in actionableStatuses &&
+                    it.requestedRole in listOf(UserRole.PARENT.key, UserRole.ENSEIGNANT.key, UserRole.ELEVE.key)
+            }
+            else -> emptyList()
+        }
     }
 
     LazyColumn(
@@ -125,59 +142,18 @@ fun NotificationsAndAuditScreen(
                         }
                     }
                     items(pendingRequests, key = { "notif_req_${it.userId}" }) { req ->
-                        ElevatedCard(
-                            colors = CardDefaults.elevatedCardColors(
-                                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                                        shape = MaterialTheme.shapes.small
-                                    ) {
-                                        Text(
-                                            text = "INSCRIPTION EN ATTENTE • ${UserRole.fromKey(req.requestedRole).labelFr.uppercase()}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                }
-                                Text(req.fullName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    text = req.email + if (req.phone.isNotBlank()) " • ${req.phone}" else "",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                if (req.schoolHint.isNotBlank()) {
-                                    Text(
-                                        text = "Établissement / Détails : ${req.schoolHint}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(
-                                        onClick = { approveRequestTarget = req },
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("Approuver")
-                                    }
-                                    OutlinedButton(
-                                        onClick = { onRejectAccessRequest(req) },
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("Refuser")
-                                    }
-                                }
-                            }
+                        val authLabel = if (req.requestedRole in listOf(UserRole.PARENT.key, UserRole.ENSEIGNANT.key, UserRole.ELEVE.key)) {
+                            "Autorité : Direction d'école"
+                        } else {
+                            "Autorité : Administration nationale"
                         }
+                        AccessRequestValidationCard(
+                            request = req,
+                            authorityLabel = authLabel,
+                            onApprove = { approveRequestTarget = req },
+                            onRequestMoreInfo = { requestInfoTarget = req },
+                            onReject = { rejectRequestTarget = req }
+                        )
                     }
                 }
 
@@ -280,13 +256,43 @@ fun NotificationsAndAuditScreen(
     if (approveRequestTarget != null) {
         val targetReq = approveRequestTarget!!
         ApproveAccessRequestDialog(
+            actorRole = role,
+            actorSchoolId = profile.schoolId,
             request = targetReq,
             regions = regions,
             schools = schools,
+            classes = classes,
+            subjects = subjects,
+            students = students,
+            onNavigateToTab = onOpenAdminTab,
             onDismiss = { approveRequestTarget = null },
-            onSubmit = { assignedRole, regionId, school ->
-                onApproveAccessRequest(targetReq, assignedRole, regionId, school)
+            onSubmit = { assignedRole, regionId, school, studentIds, classIds, subjectIds, decisionNote ->
+                onApproveAccessRequest(targetReq, assignedRole, regionId, school, studentIds, classIds, subjectIds, decisionNote)
                 approveRequestTarget = null
+            }
+        )
+    }
+
+    if (requestInfoTarget != null) {
+        val targetReq = requestInfoTarget!!
+        RequestMoreInfoDialog(
+            request = targetReq,
+            onDismiss = { requestInfoTarget = null },
+            onSubmit = { note ->
+                onRequestMoreInfoAccessRequest(targetReq, note)
+                requestInfoTarget = null
+            }
+        )
+    }
+
+    if (rejectRequestTarget != null) {
+        val targetReq = rejectRequestTarget!!
+        RejectAccessRequestDialog(
+            request = targetReq,
+            onDismiss = { rejectRequestTarget = null },
+            onSubmit = { reason ->
+                onRejectAccessRequest(targetReq, reason)
+                rejectRequestTarget = null
             }
         )
     }
